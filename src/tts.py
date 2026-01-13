@@ -74,24 +74,34 @@ class TTSEngine:
             )
 
             print("[*] Loading backbone (GGUF)...")
+            # Keep TTS on CPU to avoid HIP/ROCm conflicts with main LLM
             self._backbone = Llama.from_pretrained(
                 repo_id="neuphonic/neutts-air-q8-gguf",
                 filename="*.gguf",
                 verbose=False,
-                n_gpu_layers=-1 if self._has_gpu() else 0,
+                n_gpu_layers=0,  # Force CPU - GPU causes HIP state corruption
                 n_ctx=2048,
                 mlock=True,
-                flash_attn=self._has_gpu(),
+                flash_attn=False,
             )
 
             print("[*] Loading codec...")
-            # NeuCodec has meta tensor issues with GPU - suppress warnings and keep on CPU
+            # NeuCodec has meta tensor issues with GPU - force CPU device
             import warnings
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
-            # Don't move to GPU - neucodec has meta tensor bugs that corrupt GPU state
+            # Temporarily force CPU as default device for neucodec loading
+            original_device = torch.get_default_device()
+            torch.set_default_device("cpu")
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
+            finally:
+                # Restore original default device
+                if original_device:
+                    torch.set_default_device(original_device)
+                else:
+                    torch.set_default_device(None)
             self._codec.eval()
 
             self._model = True
@@ -127,15 +137,11 @@ class TTSEngine:
         wav, _ = librosa.load(self.voice_file, sr=16000, mono=True)
         wav_tensor = torch.from_numpy(wav).float().unsqueeze(0).unsqueeze(0)
 
-        if self._has_gpu():
-            wav_tensor = wav_tensor.cuda()
-
+        # Keep on CPU - codec has meta tensor issues with GPU
         with torch.no_grad():
             self._ref_codes = (
                 self._codec.encode_code(audio_or_path=wav_tensor).squeeze(0).squeeze(0)
             )
-            if self._has_gpu():
-                self._ref_codes = self._ref_codes.cpu()
 
         if self.voice_text and Path(self.voice_text).exists():
             with open(self.voice_text, "r", encoding="utf-8") as f:

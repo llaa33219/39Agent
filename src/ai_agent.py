@@ -25,6 +25,46 @@ def _preload_transformers():
 
 _preload_transformers()
 
+
+# Monkey-patch torch.repeat_interleave for ROCm compatibility
+# ROCm 6.3 has a bug where repeat_interleave with tensor repeats fails with HIP error
+def _patch_repeat_interleave_for_rocm():
+    import torch
+
+    if not torch.cuda.is_available():
+        return
+
+    # Check if we're on ROCm (HIP)
+    if not hasattr(torch.version, "hip") or torch.version.hip is None:
+        return
+
+    _original_repeat_interleave = torch.repeat_interleave
+
+    def _patched_repeat_interleave(input, repeats, dim=None, *, output_size=None):
+        # If repeats is a tensor on CUDA, move to CPU for the operation
+        if isinstance(repeats, torch.Tensor) and repeats.is_cuda:
+            input_device = input.device if isinstance(input, torch.Tensor) else None
+            result = _original_repeat_interleave(
+                input.cpu()
+                if isinstance(input, torch.Tensor) and input.is_cuda
+                else input,
+                repeats.cpu(),
+                dim=dim,
+                output_size=output_size,
+            )
+            if input_device is not None and input_device.type == "cuda":
+                return result.to(input_device)
+            return result
+        return _original_repeat_interleave(
+            input, repeats, dim=dim, output_size=output_size
+        )
+
+    torch.repeat_interleave = _patched_repeat_interleave
+    print("[*] Patched torch.repeat_interleave for ROCm compatibility")
+
+
+_patch_repeat_interleave_for_rocm()
+
 from .config import CharacterConfig, SessionConfig, DATA_DIR, CONVERSATION_HISTORY_LIMIT
 from .vm_manager import VMManager
 from .memory import MemoryManager, ConversationHistory
