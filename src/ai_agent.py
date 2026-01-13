@@ -6,6 +6,25 @@ from pathlib import Path
 
 from PIL import Image
 
+
+# Pre-import transformers to avoid race conditions during parallel initialization.
+# The transformers library uses lazy loading which is not thread-safe when multiple
+# threads try to import different symbols simultaneously.
+def _preload_transformers():
+    try:
+        import transformers
+
+        # Trigger lazy loading of commonly used Auto classes
+        _ = transformers.AutoProcessor
+        _ = transformers.AutoModelForVision2Seq
+        _ = transformers.AutoFeatureExtractor
+        _ = transformers.AutoModel
+    except ImportError:
+        pass
+
+
+_preload_transformers()
+
 from .config import CharacterConfig, SessionConfig, DATA_DIR, CONVERSATION_HISTORY_LIMIT
 from .vm_manager import VMManager
 from .memory import MemoryManager, ConversationHistory
@@ -186,9 +205,9 @@ class LLMProvider:
         )
 
         if "qwen3-vl" in self.model_name.lower():
-            from transformers import Qwen2VLForConditionalGeneration
+            from transformers import Qwen3VLForConditionalGeneration
 
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self._model = Qwen3VLForConditionalGeneration.from_pretrained(
                 self.model_name,
                 cache_dir=str(models_dir),
                 torch_dtype=dtype,

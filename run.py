@@ -80,7 +80,7 @@ def install_dependencies():
                 "torchvision",
                 "torchaudio",
                 "--index-url",
-                "https://download.pytorch.org/whl/cu121",
+                "https://download.pytorch.org/whl/cu128",
             ],
             check=True,
         )

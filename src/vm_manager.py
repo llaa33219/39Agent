@@ -323,6 +323,14 @@ class VMManager:
 
         self._qmp_socket = str(temp_path / "qmp.sock")
 
+        ovmf_code = Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd")
+        ovmf_vars_src = Path("/usr/share/edk2/x64/OVMF_VARS.4m.fd")
+        ovmf_vars = temp_path / "OVMF_VARS.4m.fd"
+
+        import shutil
+
+        shutil.copy(ovmf_vars_src, ovmf_vars)
+
         cmd = [
             "qemu-system-x86_64",
             "-enable-kvm",
@@ -332,6 +340,10 @@ class VMManager:
             "4",
             "-cpu",
             "host",
+            "-drive",
+            f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+            "-drive",
+            f"if=pflash,format=raw,file={ovmf_vars}",
             "-drive",
             f"file={disk_path},format=qcow2,if=virtio",
             "-device",
@@ -351,16 +363,33 @@ class VMManager:
             cmd.extend(["-cdrom", self.config.iso_path, "-boot", "d"])
 
         self.process = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
 
-        await asyncio.sleep(2)
+        await self._wait_for_socket(self._qmp_socket, timeout=10.0)
 
         self.qmp = QMPClient(self._qmp_socket)
-        await self.qmp.connect()
+        try:
+            await self.qmp.connect()
+        except (ConnectionRefusedError, FileNotFoundError) as e:
+            _, stderr = self.process.communicate(timeout=1)
+            if stderr:
+                raise RuntimeError(f"QEMU failed to start: {stderr.decode()}") from e
+            raise
 
         self.vnc = VNCClient(port=self._vnc_port)
         await self.vnc.connect()
+
+    async def _wait_for_socket(self, socket_path: str, timeout: float = 10.0):
+        start = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start < timeout:
+            if Path(socket_path).exists():
+                return
+            if self.process and self.process.poll() is not None:
+                _, stderr = self.process.communicate()
+                raise RuntimeError(f"QEMU exited early: {stderr.decode()}")
+            await asyncio.sleep(0.1)
+        raise TimeoutError(f"QEMU socket not ready after {timeout}s")
 
     async def stop(self):
         if self.vnc:

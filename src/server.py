@@ -90,8 +90,15 @@ async def websocket_session(websocket: WebSocket):
             if action == "start":
                 char_config = load_character(data.get("character", "default"))
 
+                iso_name = data.get("iso_path")
+                iso_path = None
+                if iso_name:
+                    iso_full = DATA_DIR / "iso" / iso_name
+                    if iso_full.exists():
+                        iso_path = str(iso_full)
+
                 vm_config = VMConfig(
-                    iso_path=data.get("iso_path"),
+                    iso_path=iso_path,
                     disk_gb=data.get("disk_gb", 30),
                     ram_mb=data.get("ram_mb", 12288),
                     vram_mb=data.get("vram_mb", 125),

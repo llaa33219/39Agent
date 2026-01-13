@@ -86,9 +86,8 @@ class TTSEngine:
 
             print("[*] Loading codec...")
             self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
+            self._codec = self._codec.to("cuda" if self._has_gpu() else "cpu")
             self._codec.eval()
-            if self._has_gpu():
-                self._codec = self._codec.cuda()
 
             self._model = True
 
