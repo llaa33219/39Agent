@@ -3,20 +3,122 @@ import os
 import sys
 import subprocess
 import platform
+import shutil
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent.absolute()
 VENV_DIR = ROOT_DIR / "data" / "venv"
-PYTHON_BIN = (
-    VENV_DIR / ("Scripts" if platform.system() == "Windows" else "bin") / "python"
-)
-PIP_BIN = VENV_DIR / ("Scripts" if platform.system() == "Windows" else "bin") / "pip"
+PYTHON_VERSION = "3.13"
+
+IS_WINDOWS = platform.system() == "Windows"
+VENV_BIN_DIR = VENV_DIR / ("Scripts" if IS_WINDOWS else "bin")
+PYTHON_BIN = VENV_BIN_DIR / ("python.exe" if IS_WINDOWS else "python")
+
+
+def run_cmd(
+    cmd: list[str], check: bool = True, **kwargs
+) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=check, **kwargs)
+
+
+def get_uv_path() -> str | None:
+    return shutil.which("uv")
+
+
+def ensure_uv() -> str:
+    uv_path = get_uv_path()
+    if uv_path:
+        return uv_path
+
+    print("[*] uv not found. Installing...")
+
+    if IS_WINDOWS:
+        run_cmd(
+            [
+                "powershell",
+                "-ExecutionPolicy",
+                "ByPass",
+                "-c",
+                "irm https://astral.sh/uv/install.ps1 | iex",
+            ]
+        )
+    else:
+        run_cmd(["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"])
+
+    local_bin = Path.home() / ".local" / "bin"
+    if local_bin.exists():
+        os.environ["PATH"] = f"{local_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    cargo_bin = Path.home() / ".cargo" / "bin"
+    if cargo_bin.exists():
+        os.environ["PATH"] = f"{cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    uv_path = get_uv_path()
+    if not uv_path:
+        print("[!] Failed to install uv. Please install manually:")
+        print("    curl -LsSf https://astral.sh/uv/install.sh | sh")
+        sys.exit(1)
+
+    print("[+] uv installed successfully")
+    return uv_path
+
+
+def ensure_python(uv: str) -> None:
+    result = run_cmd(
+        [uv, "python", "find", PYTHON_VERSION],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"[*] Python {PYTHON_VERSION} not found. Downloading...")
+        run_cmd([uv, "python", "install", PYTHON_VERSION])
+        print(f"[+] Python {PYTHON_VERSION} installed")
+    else:
+        print(f"[+] Python {PYTHON_VERSION} found: {result.stdout.strip()}")
+
+
+def create_venv(uv: str) -> None:
+    need_create = False
+
+    if not VENV_DIR.exists():
+        need_create = True
+    elif not PYTHON_BIN.exists():
+        print("[!] Virtual environment is incomplete or corrupted")
+        print("[*] Removing and recreating...")
+        shutil.rmtree(VENV_DIR)
+        need_create = True
+    else:
+        result = run_cmd(
+            [
+                str(PYTHON_BIN),
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            current_version = result.stdout.strip()
+            if not current_version.startswith(PYTHON_VERSION):
+                print(f"[!] Venv has Python {current_version}, need {PYTHON_VERSION}")
+                print("[*] Recreating virtual environment...")
+                shutil.rmtree(VENV_DIR)
+                need_create = True
+
+    if need_create:
+        print(f"[*] Creating virtual environment with Python {PYTHON_VERSION}...")
+        VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
+        run_cmd([uv, "venv", "--python", PYTHON_VERSION, str(VENV_DIR)])
+        print(f"[+] Virtual environment created at: {VENV_DIR}")
 
 
 def detect_gpu() -> str:
     try:
-        result = subprocess.run(
-            ["nvidia-smi"], capture_output=True, text=True, timeout=5
+        result = run_cmd(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=5, check=False
         )
         if result.returncode == 0:
             return "nvidia"
@@ -24,7 +126,9 @@ def detect_gpu() -> str:
         pass
 
     try:
-        result = subprocess.run(["rocm-smi"], capture_output=True, text=True, timeout=5)
+        result = run_cmd(
+            ["rocm-smi"], capture_output=True, text=True, timeout=5, check=False
+        )
         if result.returncode == 0:
             return "amd"
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -35,7 +139,9 @@ def detect_gpu() -> str:
             with open("/proc/bus/pci/devices", "r") as f:
                 content = f.read().lower()
                 if "amd" in content or "radeon" in content:
-                    lspci = subprocess.run(["lspci"], capture_output=True, text=True)
+                    lspci = run_cmd(
+                        ["lspci"], capture_output=True, text=True, check=False
+                    )
                     if "AMD" in lspci.stdout or "Radeon" in lspci.stdout:
                         return "amd"
         except:
@@ -44,26 +150,7 @@ def detect_gpu() -> str:
     return "cpu"
 
 
-def create_venv():
-    need_create = False
-
-    if not VENV_DIR.exists():
-        need_create = True
-    elif not PYTHON_BIN.exists():
-        print("[!] Virtual environment is incomplete or corrupted")
-        print("[*] Removing and recreating...")
-        import shutil
-
-        shutil.rmtree(VENV_DIR)
-        need_create = True
-
-    if need_create:
-        print("[*] Creating virtual environment...")
-        subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
-        print("[+] Virtual environment created at:", VENV_DIR)
-
-
-def install_dependencies():
+def install_dependencies(uv: str) -> None:
     requirements_file = ROOT_DIR / "requirements.txt"
     marker_file = VENV_DIR / ".deps_installed"
 
@@ -75,91 +162,79 @@ def install_dependencies():
         if marker_mtime >= req_mtime:
             return
 
-    print("[*] Installing dependencies...")
-
-    subprocess.run([str(PIP_BIN), "install", "--upgrade", "pip"], check=True)
+    print("[*] Installing dependencies with uv (this is fast!)...")
 
     gpu_type = detect_gpu()
     print(f"[*] Detected GPU: {gpu_type}")
 
-    if gpu_type == "nvidia":
-        print("[*] Installing PyTorch with CUDA support...")
-        subprocess.run(
-            [
-                str(PIP_BIN),
-                "install",
-                "torch",
-                "torchvision",
-                "torchaudio",
-                "--index-url",
-                "https://download.pytorch.org/whl/cu128",
-            ],
-            check=True,
-        )
-    elif gpu_type == "amd":
-        print("[*] Installing PyTorch with ROCm support...")
-        subprocess.run(
-            [
-                str(PIP_BIN),
-                "install",
-                "torch",
-                "torchvision",
-                "torchaudio",
-                "--index-url",
-                "https://download.pytorch.org/whl/rocm6.3",
-            ],
-            check=True,
-        )
-    else:
-        print("[*] Installing PyTorch (CPU only)...")
-        subprocess.run(
-            [
-                str(PIP_BIN),
-                "install",
-                "torch",
-                "torchvision",
-                "torchaudio",
-                "--index-url",
-                "https://download.pytorch.org/whl/cpu",
-            ],
-            check=True,
-        )
+    torch_index = {
+        "nvidia": "https://download.pytorch.org/whl/cu128",
+        "amd": "https://download.pytorch.org/whl/rocm6.3",
+        "cpu": "https://download.pytorch.org/whl/cpu",
+    }[gpu_type]
+
+    print(f"[*] Installing PyTorch with {gpu_type.upper()} support...")
+    run_cmd(
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(PYTHON_BIN),
+            "torch",
+            "torchvision",
+            "torchaudio",
+            "--index-url",
+            torch_index,
+        ]
+    )
 
     if requirements_file.exists():
-        subprocess.run(
-            [str(PIP_BIN), "install", "-r", str(requirements_file)], check=True
+        run_cmd(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(PYTHON_BIN),
+                "-r",
+                str(requirements_file),
+            ]
         )
 
     if gpu_type == "nvidia":
         print("[*] Installing llama-cpp-python with CUDA support...")
         env = os.environ.copy()
         env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-        subprocess.run(
+        run_cmd(
             [
-                str(PIP_BIN),
+                uv,
+                "pip",
                 "install",
+                "--python",
+                str(PYTHON_BIN),
                 "llama-cpp-python",
-                "--force-reinstall",
-                "--no-cache-dir",
+                "--reinstall",
+                "--no-cache",
             ],
             env=env,
-            check=True,
         )
 
     marker_file.touch()
     print("[+] Dependencies installed successfully")
 
 
-def check_espeak():
+def check_espeak() -> bool:
     try:
-        result = subprocess.run(
+        result = run_cmd(
             ["espeak", "--version"],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
-            print(f"[+] espeak found")
+            print("[+] espeak found")
             return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -172,13 +247,14 @@ def check_espeak():
     return False
 
 
-def check_qemu():
+def check_qemu() -> bool:
     try:
-        result = subprocess.run(
+        result = run_cmd(
             ["qemu-system-x86_64", "--version"],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
             version = result.stdout.split("\n")[0]
@@ -198,10 +274,13 @@ def check_qemu():
 def main():
     print("=" * 50)
     print("  39Agent - AI-Controlled VM Agent")
+    print(f"  (Python {PYTHON_VERSION} via uv)")
     print("=" * 50)
 
-    create_venv()
-    install_dependencies()
+    uv = ensure_uv()
+    ensure_python(uv)
+    create_venv(uv)
+    install_dependencies(uv)
 
     espeak_ok = check_espeak()
     if not espeak_ok:
@@ -223,7 +302,7 @@ def main():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT_DIR)
 
-    subprocess.run([str(PYTHON_BIN), "-m", "src.server"], env=env)
+    run_cmd([str(PYTHON_BIN), "-m", "src.server"], env=env)
 
 
 if __name__ == "__main__":
