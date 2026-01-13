@@ -555,14 +555,47 @@ class VMManager:
             self._temp_dir.cleanup()
 
     async def capture_screen(self) -> Image.Image:
-        if not self.vnc:
+        if not self.qmp or not self._temp_dir:
             raise RuntimeError("VM not started")
-        screen = await self.vnc.capture_screen()
 
+        dump_path = Path(self._temp_dir.name) / "screen.ppm"
+
+        for _ in range(3):
+            try:
+                if dump_path.exists():
+                    dump_path.unlink()
+
+                await self.qmp.execute("screendump", {"filename": str(dump_path)})
+
+                for _ in range(5):
+                    if dump_path.exists() and dump_path.stat().st_size > 0:
+                        break
+                    await asyncio.sleep(0.05)
+
+                if dump_path.exists() and dump_path.stat().st_size > 0:
+                    with Image.open(dump_path) as img:
+                        screen = img.copy()
+
+                    target_size = (self.config.width, self.config.height)
+                    if screen.size != target_size:
+                        screen = screen.resize(target_size, Image.Resampling.LANCZOS)
+                    return screen
+
+            except Exception as e:
+                print(f"[!] Screendump failed, retrying: {e}")
+                await asyncio.sleep(0.1)
+
+        print("[!] QMP screendump failed, falling back to VNC capture")
+
+        if not self.vnc:
+            raise RuntimeError(
+                "Failed to capture screen (QMP failed and VNC not ready)"
+            )
+
+        screen = await self.vnc.capture_screen()
         target_size = (self.config.width, self.config.height)
         if screen.size != target_size:
             screen = screen.resize(target_size, Image.Resampling.LANCZOS)
-
         return screen
 
     async def send_key(self, key: str, down: Optional[bool] = None):
