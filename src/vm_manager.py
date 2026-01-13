@@ -190,32 +190,25 @@ class QMPClient:
             },
         )
 
-    async def send_mouse_move(self, x: int, y: int, absolute: bool = True):
-        if absolute:
-            await self.execute(
-                "input-send-event",
-                {
-                    "events": [
-                        {"type": "abs", "data": {"axis": "x", "value": x}},
-                        {"type": "abs", "data": {"axis": "y", "value": y}},
-                    ]
-                },
-            )
-        else:
-            await self.execute(
-                "input-send-event",
-                {
-                    "events": [
-                        {"type": "rel", "data": {"axis": "x", "value": x}},
-                        {"type": "rel", "data": {"axis": "y", "value": y}},
-                    ]
-                },
-            )
+    async def send_mouse_move(self, x: int, y: int):
+        await self.execute(
+            "input-send-event",
+            {
+                "device": "mouse0",
+                "events": [
+                    {"type": "rel", "data": {"axis": "x", "value": x}},
+                    {"type": "rel", "data": {"axis": "y", "value": y}},
+                ],
+            },
+        )
 
     async def send_mouse_button(self, button: str, down: bool):
         await self.execute(
             "input-send-event",
-            {"events": [{"type": "btn", "data": {"down": down, "button": button}}]},
+            {
+                "device": "mouse0",
+                "events": [{"type": "btn", "data": {"down": down, "button": button}}],
+            },
         )
 
     async def close(self):
@@ -501,7 +494,7 @@ class VMManager:
             "none",
             "-usb",
             "-device",
-            "usb-tablet",
+            "usb-mouse,id=mouse0",
         ]
 
         if self.config.iso_path:
@@ -660,15 +653,15 @@ class VMManager:
         if not self.qmp:
             raise RuntimeError("VM not started")
 
-        abs_x = int((x / self.config.width) * 32767)
-        abs_y = int((y / self.config.height) * 32767)
-        print(f"[VM] Moving cursor to ({x}, {y}) -> abs({abs_x}, {abs_y})")
-        await self.qmp.send_mouse_move(abs_x, abs_y, absolute=True)
+        print(f"[VM] Moving cursor to ({x}, {y})")
+        await self.qmp.send_mouse_move(-self.config.width * 2, -self.config.height * 2)
+        await asyncio.sleep(0.02)
+        await self.qmp.send_mouse_move(x, y)
 
     async def move_cursor_relative(self, dx: int, dy: int):
         if not self.qmp:
             raise RuntimeError("VM not started")
-        await self.qmp.send_mouse_move(dx, dy, absolute=False)
+        await self.qmp.send_mouse_move(dx, dy)
 
     async def click(self, button: str = "left"):
         if not self.qmp:
