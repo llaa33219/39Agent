@@ -260,6 +260,120 @@ class VNCClient:
         name_len = struct.unpack(">I", server_init[20:24])[0]
         await self._reader.readexactly(name_len)
 
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx", 32, 24, 0, 1, 255, 255, 255, 0, 8, 16
+        )
+        self._writer.write(struct.pack("Bxxx", 0) + pixel_format)
+        await self._writer.drain()
+
+        self._writer.write(struct.pack(">BxHi", 2, 1, 0))
+        await self._writer.drain()
+
+        # Request 32-bit RGBX format (B G R X in memory)
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx",
+            32,
+            24,
+            0,
+            1,  # bpp, depth, big_endian, true_color
+            255,
+            255,
+            255,  # red_max, green_max, blue_max
+            0,
+            8,
+            16,  # red_shift, green_shift, blue_shift
+        )
+        self._writer.write(struct.pack("Bxxx", 0) + pixel_format)
+        await self._writer.drain()
+
+        # Request Raw encoding (0)
+        self._writer.write(struct.pack(">BxHi", 2, 1, 0))
+        await self._writer.drain()
+
+        # Send SetPixelFormat to ensure 32-bit RGBX
+        # MsgType(0) + Pad(3) + PixelFormat(16)
+        # PixelFormat: BPP(32), Depth(24), BigEndian(0), TrueColor(1),
+        #              RedMax(255), GreenMax(255), BlueMax(255),
+        #              RedShift(0), GreenShift(8), BlueShift(16), Pad(3)
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx",
+            32,  # BPP
+            24,  # Depth
+            0,  # BigEndian
+            1,  # TrueColor
+            255,  # RedMax
+            255,  # GreenMax
+            255,  # BlueMax
+            0,  # RedShift
+            8,  # GreenShift
+            16,  # BlueShift
+        )
+        msg = struct.pack("Bxxx", 0) + pixel_format
+        self._writer.write(msg)
+        await self._writer.drain()
+
+        # Send SetEncodings to support Raw (0)
+        # MsgType(2) + Pad(1) + NumEncodings(1) + Encoding(4)
+        msg = struct.pack(">BxH", 2, 1) + struct.pack(">i", 0)
+        self._writer.write(msg)
+        await self._writer.drain()
+
+        # Send SetPixelFormat to ensure 32-bit RGBX
+        # MsgType(0) + Pad(3) + PixelFormat(16)
+        # PixelFormat: BPP(32), Depth(24), BigEndian(0), TrueColor(1),
+        #              RedMax(255), GreenMax(255), BlueMax(255),
+        #              RedShift(0), GreenShift(8), BlueShift(16), Pad(3)
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx",
+            32,  # BPP
+            24,  # Depth
+            0,  # BigEndian
+            1,  # TrueColor
+            255,  # RedMax
+            255,  # GreenMax
+            255,  # BlueMax
+            0,  # RedShift
+            8,  # GreenShift
+            16,  # BlueShift
+        )
+        msg = struct.pack("Bxxx", 0) + pixel_format
+        self._writer.write(msg)
+        await self._writer.drain()
+
+        # Send SetEncodings to support Raw (0)
+        # MsgType(2) + Pad(1) + NumEncodings(1) + Encoding(4)
+        msg = struct.pack(">BxH", 2, 1) + struct.pack(">i", 0)
+        self._writer.write(msg)
+        await self._writer.drain()
+
+        # Send SetPixelFormat to ensure 32-bit RGBX
+        # MsgType(0) + Pad(3) + PixelFormat(16)
+        # PixelFormat: BPP(32), Depth(24), BigEndian(0), TrueColor(1),
+        #              RedMax(255), GreenMax(255), BlueMax(255),
+        #              RedShift(0), GreenShift(8), BlueShift(16), Pad(3)
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx",
+            32,  # BPP
+            24,  # Depth
+            0,  # BigEndian
+            1,  # TrueColor
+            255,  # RedMax
+            255,  # GreenMax
+            255,  # BlueMax
+            0,  # RedShift
+            8,  # GreenShift
+            16,  # BlueShift
+        )
+        msg = struct.pack("Bxxx", 0) + pixel_format
+        self._writer.write(msg)
+        await self._writer.drain()
+
+        # Send SetEncodings to support Raw (0)
+        # MsgType(2) + Pad(1) + NumEncodings(1) + Encoding(4)
+        msg = struct.pack(">BxH", 2, 1) + struct.pack(">i", 0)
+        self._writer.write(msg)
+        await self._writer.drain()
+
     async def capture_screen(self) -> Image.Image:
         if not self._writer or not self._reader:
             raise RuntimeError("Not connected")

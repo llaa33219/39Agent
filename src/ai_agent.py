@@ -535,7 +535,7 @@ class AIAgent:
             }
         )
 
-        print("[*] Generating LLM response (this may take a while on CPU)...")
+        print(f"[*] Generating LLM response (on {self.llm._device})...")
         import time
 
         start_time = time.time()
