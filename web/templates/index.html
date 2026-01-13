@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>39Agent - AI VM Controller</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="setup-screen" class="screen active">
+            <div class="setup-container">
+                <h1>39Agent</h1>
+                <p class="subtitle">AI-Controlled Virtual Machine Agent</p>
+                
+                <div class="form-section">
+                    <label>Character</label>
+                    <div id="character-list" class="character-grid"></div>
+                </div>
+                
+                <div class="form-section">
+                    <label>ISO Image</label>
+                    <select id="iso-select">
+                        <option value="">No ISO (use existing disk)</option>
+                    </select>
+                </div>
+                
+                <div class="form-section">
+                    <label>Task / Command</label>
+                    <textarea id="task-input" placeholder="What should the agent do?"></textarea>
+                </div>
+                
+                <div class="form-section collapsible">
+                    <button class="collapse-toggle" onclick="toggleAdvanced()">
+                        Advanced Settings
+                    </button>
+                    <div id="advanced-settings" class="collapsed">
+                        <div class="setting-row">
+                            <label>Disk Size (GB)</label>
+                            <input type="number" id="disk-gb" value="30" min="10" max="500">
+                        </div>
+                        <div class="setting-row">
+                            <label>RAM (MB)</label>
+                            <input type="number" id="ram-mb" value="12288" min="1024" max="65536">
+                        </div>
+                        <div class="setting-row">
+                            <label>VRAM (MB)</label>
+                            <input type="number" id="vram-mb" value="125" min="16" max="1024">
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="start-btn" class="primary-btn" onclick="startSession()">
+                    Start Agent
+                </button>
+            </div>
+        </div>
+        
+        <div id="running-screen" class="screen">
+            <div class="top-bar">
+                <div class="status-indicator">
+                    <span id="status-dot" class="dot"></span>
+                    <span id="status-text">Initializing...</span>
+                </div>
+                <div class="controls">
+                    <button id="record-btn" class="icon-btn" onclick="toggleRecording()">
+                        <span class="icon">&#9679;</span> Record
+                    </button>
+                    <button id="restart-btn" class="icon-btn" onclick="restartAgent()">
+                        <span class="icon">&#8635;</span> Restart
+                    </button>
+                    <button id="stop-btn" class="icon-btn danger" onclick="stopAgent()">
+                        <span class="icon">&#9632;</span> Stop
+                    </button>
+                </div>
+            </div>
+            
+            <div class="main-content">
+                <div class="vm-container">
+                    <div id="vm-screen">
+                        <img id="screen-image" alt="VM Screen">
+                        <div id="no-screen">Waiting for screen...</div>
+                    </div>
+                </div>
+                
+                <div class="agent-panel">
+                    <div class="character-display">
+                        <img id="character-image" alt="Character">
+                    </div>
+                    
+                    <div class="speech-bubble" id="speech-bubble">
+                        <p id="speech-text"></p>
+                    </div>
+                    
+                    <div class="tool-log">
+                        <h3>Tool Usage</h3>
+                        <div id="tool-history"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>

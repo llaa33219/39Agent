@@ -1,0 +1,30 @@
+# Core
+fastapi
+uvicorn[standard]
+websockets
+pydantic
+pyyaml
+pillow
+numpy
+python-multipart
+jinja2
+aiofiles
+httpx
+
+# AI/ML
+sentence-transformers
+transformers
+accelerate
+huggingface-hub
+qwen-vl-utils
+
+# Audio
+torchaudio
+llama-cpp-python
+neucodec
+phonemizer
+librosa
+soundfile
+
+# Vector DB
+lancedb
