@@ -85,8 +85,13 @@ class TTSEngine:
             )
 
             print("[*] Loading codec...")
-            self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
-            self._codec = self._codec.to("cuda" if self._has_gpu() else "cpu")
+            # NeuCodec has meta tensor issues with GPU - suppress warnings and keep on CPU
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
+            # Don't move to GPU - neucodec has meta tensor bugs that corrupt GPU state
             self._codec.eval()
 
             self._model = True

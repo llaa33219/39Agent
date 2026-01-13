@@ -412,9 +412,10 @@ class AIAgent:
         self._todo_path.parent.mkdir(parents=True, exist_ok=True)
         self._todo_path.write_text("")
 
-        await asyncio.gather(
-            self.llm.initialize(), self.tts.initialize(), self.memory.initialize()
-        )
+        # Initialize LLM first (needs clean GPU state), then others
+        # TTS has meta tensor bugs that can corrupt GPU state if run in parallel
+        await self.llm.initialize()
+        await asyncio.gather(self.tts.initialize(), self.memory.initialize())
 
     async def start_vm(self):
         from .config import VMConfig
