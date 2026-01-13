@@ -146,7 +146,7 @@ class ConversationHistory:
         self.memory = memory
 
     async def add_message(
-        self, role: str, content: str, tool_use: Optional[dict] = None
+        self, role: str, content: str, tool_use: Optional[dict | list] = None
     ):
         message: dict[str, Any] = {
             "role": role,

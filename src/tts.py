@@ -166,9 +166,9 @@ class TTSEngine:
             return None
 
         with torch.no_grad():
-            codes = torch.tensor(speech_ids, dtype=torch.long)[None, None, :]
-            if self._has_gpu():
-                codes = codes.cuda()
+            codes = torch.tensor(speech_ids, dtype=torch.long, device="cpu")[
+                None, None, :
+            ]
             recon = self._codec.decode_code(codes).cpu().numpy()
 
         return recon[0, 0, :]

@@ -69,7 +69,7 @@ from .config import CharacterConfig, SessionConfig, DATA_DIR, CONVERSATION_HISTO
 from .vm_manager import VMManager
 from .memory import MemoryManager, ConversationHistory
 from .tts import TTSEngine
-from .tools import ToolExecutor, ToolResult, parse_tool_call
+from .tools import ToolExecutor, ToolResult, parse_tool_calls
 
 
 SYSTEM_PROMPT_TEMPLATE = """You are an AI agent controlling a virtual machine. You can see the screen and interact with it using various tools.
@@ -169,11 +169,20 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
     </tool>
 
 ## Rules
-- You can only use ONE tool per response
-- Always observe the result before proceeding
-- Use the speak tool to communicate with the user
+- You MUST use EXACTLY TWO tools per response: speak + one action tool
+- First tool: speak (tell user what you're about to do)
+- Second tool: the action you want to take
+- Example response format:
+  <tool>
+  name: speak
+  text: I'll click on the browser icon.
+  </tool>
+  <tool>
+  name: click
+  button: left
+  </tool>
 - Track your progress using the todo tool
-- When the task is complete, use the end tool
+- When the task is complete, use speak + end tools together
 
 ## Current Task
 {task}
@@ -543,25 +552,31 @@ class AIAgent:
         elapsed = time.time() - start_time
         print(f"[+] LLM response generated in {elapsed:.1f}s")
 
-        tool_call = parse_tool_call(response)
+        tool_calls = parse_tool_calls(response)
         tool_result = None
+        tool_uses = []
 
-        if tool_call:
-            tool_name, params = tool_call
-
+        for tool_name, params in tool_calls:
             if self._on_tool_callback:
                 await self._on_tool_callback(tool_name, params)
 
             tool_result = await self.tools.execute(tool_name, params)
-
-            await self.history.add_message(
-                "assistant",
-                response,
-                tool_use={
+            tool_uses.append(
+                {
                     "name": tool_name,
                     "params": params,
                     "result": tool_result.message,
-                },
+                }
+            )
+
+            if not tool_result.should_continue:
+                break
+
+        if tool_uses:
+            await self.history.add_message(
+                "assistant",
+                response,
+                tool_use=tool_uses[0] if len(tool_uses) == 1 else tool_uses,
             )
         else:
             await self.history.add_message("assistant", response)

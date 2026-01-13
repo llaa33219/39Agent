@@ -155,23 +155,31 @@ class ToolExecutor:
 
 
 def parse_tool_call(text: str) -> Optional[tuple[str, dict]]:
+    """Parse single tool call (deprecated, use parse_tool_calls)."""
+    result = parse_tool_calls(text)
+    return result[0] if result else None
+
+
+def parse_tool_calls(text: str) -> list[tuple[str, dict]]:
+    """Parse all tool calls from response text."""
     import yaml
 
     pattern = r"<tool>\s*(.*?)\s*</tool>"
-    match = re.search(pattern, text, re.DOTALL)
+    matches = re.findall(pattern, text, re.DOTALL)
 
-    if not match:
-        return None
+    if not matches:
+        return []
 
-    content = match.group(1).strip()
+    results = []
+    for content in matches:
+        content = content.strip()
+        try:
+            parsed = yaml.safe_load(content)
+            if isinstance(parsed, dict):
+                tool_name = parsed.pop("name", parsed.pop("tool", None))
+                if tool_name:
+                    results.append((tool_name, parsed))
+        except:
+            pass
 
-    try:
-        parsed = yaml.safe_load(content)
-        if isinstance(parsed, dict):
-            tool_name = parsed.pop("name", parsed.pop("tool", None))
-            if tool_name:
-                return (tool_name, parsed)
-    except:
-        pass
-
-    return None
+    return results
