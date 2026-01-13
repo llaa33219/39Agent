@@ -238,27 +238,27 @@ class VNCClient:
     async def connect(self):
         self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
 
-        version = await self._reader.read(12)
+        version = await self._reader.readexactly(12)
         self._writer.write(b"RFB 003.008\n")
         await self._writer.drain()
 
-        num_types = (await self._reader.read(1))[0]
-        security_types = await self._reader.read(num_types)
+        num_types = (await self._reader.readexactly(1))[0]
+        security_types = await self._reader.readexactly(num_types)
         self._writer.write(bytes([1]))
         await self._writer.drain()
 
-        result = await self._reader.read(4)
+        result = await self._reader.readexactly(4)
         if struct.unpack(">I", result)[0] != 0:
             raise ConnectionError("VNC authentication failed")
 
         self._writer.write(bytes([1]))
         await self._writer.drain()
 
-        server_init = await self._reader.read(24)
+        server_init = await self._reader.readexactly(24)
         self.width, self.height = struct.unpack(">HH", server_init[0:4])
 
         name_len = struct.unpack(">I", server_init[20:24])[0]
-        await self._reader.read(name_len)
+        await self._reader.readexactly(name_len)
 
     async def capture_screen(self) -> Image.Image:
         if not self._writer or not self._reader:
@@ -268,7 +268,7 @@ class VNCClient:
         self._writer.write(msg)
         await self._writer.drain()
 
-        header = await self._reader.read(4)
+        header = await self._reader.readexactly(4)
         if header[0] != 0:
             raise ValueError(f"Unexpected message type: {header[0]}")
 
@@ -277,11 +277,11 @@ class VNCClient:
         image = Image.new("RGB", (self.width, self.height))
 
         for _ in range(num_rects):
-            rect_header = await self._reader.read(12)
+            rect_header = await self._reader.readexactly(12)
             x, y, w, h, encoding = struct.unpack(">HHHHi", rect_header)
 
             if encoding == 0:
-                pixels = await self._reader.read(w * h * 4)
+                pixels = await self._reader.readexactly(w * h * 4)
                 rect_img = Image.frombytes("RGBX", (w, h), pixels)
                 image.paste(rect_img.convert("RGB"), (x, y))
 

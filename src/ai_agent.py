@@ -217,6 +217,7 @@ class LLMProvider:
                 cache_dir=str(models_dir),
                 torch_dtype=dtype,
                 device_map="auto" if self._device == "cuda" else None,
+                low_cpu_mem_usage=False,
                 trust_remote_code=True,
             )
         else:
@@ -225,6 +226,7 @@ class LLMProvider:
                 cache_dir=str(models_dir),
                 torch_dtype=dtype,
                 device_map="auto" if self._device == "cuda" else None,
+                low_cpu_mem_usage=False,
                 trust_remote_code=True,
             )
 
