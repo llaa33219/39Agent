@@ -21,15 +21,31 @@ from .config import (
     list_isos,
 )
 from .ai_agent import AIAgent
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="39Agent")
+active_sessions: dict[str, AIAgent] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    print("[*] Shutting down, cleaning up sessions...")
+    for session_id, agent in list(active_sessions.items()):
+        print(f"[*] Stopping session {session_id}")
+        try:
+            agent.stop()
+            await agent.stop_vm()
+        except Exception as e:
+            print(f"[!] Error stopping session {session_id}: {e}")
+    active_sessions.clear()
+
+
+app = FastAPI(title="39Agent", lifespan=lifespan)
 
 WEB_DIR = ROOT_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-active_sessions: dict[str, AIAgent] = {}
 
 
 class StartSessionRequest(BaseModel):

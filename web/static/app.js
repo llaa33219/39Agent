@@ -193,8 +193,9 @@ function showRunningScreen(character) {
     document.getElementById('setup-screen').classList.remove('active');
     document.getElementById('running-screen').classList.add('active');
     
-    if (character && character.has_image) {
-        document.getElementById('character-image').src = `/api/character/${character.name}/image`;
+    const hudImg = document.getElementById('hud-character-image');
+    if (hudImg && character && character.has_image) {
+        hudImg.src = `/api/character/${character.name}/image`;
     }
 }
 
@@ -208,30 +209,38 @@ function updateScreen(base64Image) {
 }
 
 function updateSpeech(text) {
-    const speechText = document.getElementById('speech-text');
+    const speechText = document.getElementById('hud-speech-text');
+    if (!speechText) return;
+    
+    speechText.style.opacity = '0';
     speechText.textContent = text;
     
-    const bubble = document.getElementById('speech-bubble');
-    bubble.style.animation = 'none';
-    bubble.offsetHeight;
-    bubble.style.animation = 'fadeIn 0.3s ease';
+    void speechText.offsetWidth;
+    
+    speechText.style.transition = 'opacity 0.3s ease';
+    speechText.style.opacity = '1';
 }
 
 function addToolEntry(name, params, pending = false) {
     const container = document.getElementById('tool-history');
     
-    const entry = document.createElement('div');
-    entry.className = 'tool-entry' + (pending ? '' : ' success');
-    entry.innerHTML = `
-        <div class="tool-name">${name}</div>
-        <div class="tool-params">${JSON.stringify(params, null, 2)}</div>
-    `;
-    
-    container.insertBefore(entry, container.firstChild);
-    
-    if (container.children.length > 20) {
-        container.removeChild(container.lastChild);
+    if (container) {
+        const entry = document.createElement('div');
+        entry.className = 'tool-entry' + (pending ? '' : ' success');
+        entry.innerHTML = `
+            <div class="tool-name">${name}</div>
+            <div class="tool-params">${JSON.stringify(params, null, 2)}</div>
+        `;
+        
+        container.insertBefore(entry, container.firstChild);
+        
+        if (container.children.length > 20) {
+            container.removeChild(container.lastChild);
+        }
     }
+    
+    const hudTool = document.getElementById('hud-tool-status');
+    if (hudTool) hudTool.textContent = name;
 }
 
 function updateLastToolResult(success, message) {
@@ -274,6 +283,12 @@ function stopAgent() {
     
     document.getElementById('screen-image').classList.remove('visible');
     document.getElementById('no-screen').style.display = 'block';
-    document.getElementById('speech-text').textContent = '';
-    document.getElementById('tool-history').innerHTML = '';
+    
+    const hudSpeech = document.getElementById('hud-speech-text');
+    const hudTool = document.getElementById('hud-tool-status');
+    const toolHistory = document.getElementById('tool-history');
+    
+    if (hudSpeech) hudSpeech.textContent = '';
+    if (hudTool) hudTool.textContent = '';
+    if (toolHistory) toolHistory.innerHTML = '';
 }

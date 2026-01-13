@@ -80,23 +80,20 @@
                     <div id="vm-screen">
                         <img id="screen-image" alt="VM Screen">
                         <div id="no-screen">Waiting for screen...</div>
+                        
+                        <div class="agent-hud">
+                            <div class="hud-avatar">
+                                <img id="hud-character-image" alt="Character">
+                            </div>
+                            <div class="hud-content">
+                                <div id="hud-speech-text" class="hud-speech"></div>
+                                <div id="hud-tool-status" class="hud-tool"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="agent-panel">
-                    <div class="character-display">
-                        <img id="character-image" alt="Character">
-                    </div>
-                    
-                    <div class="speech-bubble" id="speech-bubble">
-                        <p id="speech-text"></p>
-                    </div>
-                    
-                    <div class="tool-log">
-                        <h3>Tool Usage</h3>
-                        <div id="tool-history"></div>
-                    </div>
-                </div>
+                <div id="tool-history" style="display: none;"></div>
             </div>
         </div>
     </div>

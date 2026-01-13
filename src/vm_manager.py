@@ -494,7 +494,7 @@ class VMManager:
             "-drive",
             f"file={disk_path},format=qcow2,if=virtio",
             "-device",
-            f"VGA,vgamem_mb={self.config.vram_mb}",
+            f"qxl-vga,vgamem_mb={self.config.vram_mb},xres={self.config.width},yres={self.config.height}",
             "-vnc",
             f"127.0.0.1:{self._vnc_port - 5900}",
             "-qmp",
@@ -557,7 +557,13 @@ class VMManager:
     async def capture_screen(self) -> Image.Image:
         if not self.vnc:
             raise RuntimeError("VM not started")
-        return await self.vnc.capture_screen()
+        screen = await self.vnc.capture_screen()
+
+        target_size = (self.config.width, self.config.height)
+        if screen.size != target_size:
+            screen = screen.resize(target_size, Image.Resampling.LANCZOS)
+
+        return screen
 
     async def send_key(self, key: str, down: Optional[bool] = None):
         if not self.qmp:
