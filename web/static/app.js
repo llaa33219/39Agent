@@ -1,11 +1,117 @@
 let ws = null;
 let selectedCharacter = null;
 let isRecording = false;
+let currentSessionId = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY = 2000;
 
 document.addEventListener('DOMContentLoaded', async () => {
     await loadCharacters();
     await loadISOs();
+    await checkExistingSession();
 });
+
+async function checkExistingSession() {
+    const savedSessionId = localStorage.getItem('39agent_session_id');
+    if (!savedSessionId) return;
+    
+    try {
+        const response = await fetch(`/api/session/${savedSessionId}`);
+        const data = await response.json();
+        
+        if (data.exists && data.running) {
+            console.log('[*] Found active session, reconnecting...');
+            await reconnectToSession(savedSessionId, data.character);
+        } else {
+            clearSessionStorage();
+        }
+    } catch (e) {
+        console.error('Failed to check existing session:', e);
+        clearSessionStorage();
+    }
+}
+
+function clearSessionStorage() {
+    localStorage.removeItem('39agent_session_id');
+    localStorage.removeItem('39agent_character');
+}
+
+async function reconnectToSession(sessionId, character) {
+    ws = new WebSocket(`ws://${window.location.host}/ws/session`);
+    
+    ws.onopen = () => {
+        console.log('[*] WebSocket connected, sending reconnect request...');
+        ws.send(JSON.stringify({
+            action: 'reconnect',
+            session_id: sessionId
+        }));
+    };
+    
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'error' && data.message === 'Session not found or expired') {
+            console.log('[!] Session expired, showing setup screen');
+            clearSessionStorage();
+            return;
+        }
+        
+        handleMessage(data);
+    };
+    
+    ws.onclose = () => {
+        console.log('[*] WebSocket closed, attempting reconnect...');
+        attemptReconnect();
+    };
+    
+    ws.onerror = (e) => {
+        console.error('WebSocket error:', e);
+    };
+    
+    currentSessionId = sessionId;
+    
+    if (character) {
+        showRunningScreen(character);
+    }
+}
+
+function attemptReconnect() {
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.log('[!] Max reconnect attempts reached');
+        clearSessionStorage();
+        document.getElementById('running-screen').classList.remove('active');
+        document.getElementById('setup-screen').classList.add('active');
+        return;
+    }
+    
+    reconnectAttempts++;
+    console.log(`[*] Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+    
+    setTimeout(async () => {
+        const savedSessionId = localStorage.getItem('39agent_session_id');
+        if (savedSessionId) {
+            try {
+                const response = await fetch(`/api/session/${savedSessionId}`);
+                const data = await response.json();
+                if (data.exists && data.running) {
+                    await reconnectToSession(savedSessionId, data.character);
+                    reconnectAttempts = 0;
+                } else {
+                    clearSessionStorage();
+                }
+            } catch (e) {
+                attemptReconnect();
+            }
+        }
+    }, RECONNECT_DELAY);
+}
+
+function saveSession(sessionId, character) {
+    localStorage.setItem('39agent_session_id', sessionId);
+    localStorage.setItem('39agent_character', JSON.stringify(character));
+    currentSessionId = sessionId;
+}
 
 async function loadCharacters() {
     try {
@@ -114,7 +220,11 @@ async function startSession() {
     
     ws.onclose = () => {
         console.log('WebSocket closed');
-        document.getElementById('start-btn').disabled = false;
+        if (currentSessionId) {
+            attemptReconnect();
+        } else {
+            document.getElementById('start-btn').disabled = false;
+        }
     };
     
     ws.onerror = (e) => {
@@ -128,7 +238,10 @@ function handleMessage(data) {
     switch (data.type) {
         case 'status':
             updateStatus(data.status);
-            if (data.status === 'running') {
+            if (data.status === 'running' && data.session_id) {
+                saveSession(data.session_id, data.character);
+                showRunningScreen(data.character);
+            } else if (data.status === 'running') {
                 showRunningScreen(data.character);
             }
             break;
@@ -276,6 +389,10 @@ function stopAgent() {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: 'stop' }));
     }
+    
+    clearSessionStorage();
+    currentSessionId = null;
+    reconnectAttempts = 0;
     
     document.getElementById('running-screen').classList.remove('active');
     document.getElementById('setup-screen').classList.add('active');

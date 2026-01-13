@@ -169,7 +169,10 @@ class QMPClient:
         self._writer.write((json.dumps(msg) + "\n").encode())
         await self._writer.drain()
         response = await self._reader.readline()
-        return json.loads(response)
+        result = json.loads(response)
+        if "error" in result:
+            print(f"[QMP] Error: {result['error']}")
+        return result
 
     async def send_key(self, scancode: int, down: bool):
         await self.execute(
@@ -210,14 +213,9 @@ class QMPClient:
             )
 
     async def send_mouse_button(self, button: str, down: bool):
-        btn_map = {"left": 0, "right": 1, "middle": 2}
         await self.execute(
             "input-send-event",
-            {
-                "events": [
-                    {"type": "btn", "data": {"down": down, "button": f"mouse-{button}"}}
-                ]
-            },
+            {"events": [{"type": "btn", "data": {"down": down, "button": button}}]},
         )
 
     async def close(self):
@@ -664,6 +662,7 @@ class VMManager:
 
         abs_x = int((x / self.config.width) * 32767)
         abs_y = int((y / self.config.height) * 32767)
+        print(f"[VM] Moving cursor to ({x}, {y}) -> abs({abs_x}, {abs_y})")
         await self.qmp.send_mouse_move(abs_x, abs_y, absolute=True)
 
     async def move_cursor_relative(self, dx: int, dy: int):
@@ -674,6 +673,7 @@ class VMManager:
     async def click(self, button: str = "left"):
         if not self.qmp:
             raise RuntimeError("VM not started")
+        print(f"[VM] Clicking {button} button")
         await self.qmp.send_mouse_button(button, True)
         await asyncio.sleep(0.05)
         await self.qmp.send_mouse_button(button, False)

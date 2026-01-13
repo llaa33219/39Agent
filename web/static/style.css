@@ -290,19 +290,22 @@ textarea {
 .agent-hud {
     position: absolute;
     bottom: 24px;
-    left: 24px;
-    right: 24px;
+    left: 50%;
     background: rgba(18, 18, 26, 0.85);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(102, 126, 234, 0.2);
     border-radius: 16px;
     padding: 12px 16px;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     z-index: 10;
     pointer-events: none;
+    max-height: 100px;
+    width: fit-content;
+    transform: translate(-50%, 0);
+    overflow: visible;
 }
 
 .hud-avatar {
@@ -310,12 +313,10 @@ textarea {
 }
 
 .hud-avatar img {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    border: 2px solid #667eea;
+    width: 180px;
+    height: 288px;
+    border-radius: 15px;
     object-fit: cover;
-    box-shadow: 0 0 10px rgba(102, 126, 234, 0.3);
 }
 
 .hud-content {

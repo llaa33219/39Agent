@@ -302,6 +302,27 @@ def main():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT_DIR)
 
+    # GPU crash prevention: Configure CUDA/ROCm memory allocator
+    gpu_type = detect_gpu()
+    if gpu_type == "nvidia":
+        # Prevent memory fragmentation and reduce OOM crashes
+        # - max_split_size_mb: Limits allocation splitting to reduce fragmentation
+        # - garbage_collection_threshold: Triggers cleanup at 80% usage
+        env["PYTORCH_CUDA_ALLOC_CONF"] = (
+            "max_split_size_mb:512,garbage_collection_threshold:0.8"
+        )
+        print("[*] CUDA memory allocator configured for stability")
+    elif gpu_type == "amd":
+        # ROCm-specific settings for stability
+        # - HSA_FORCE_FINE_GRAIN_PCIE: Better memory coherence (reduces HIP errors)
+        # - GPU_MAX_HEAP_SIZE: Limit heap to prevent runaway allocations
+        env.setdefault("HSA_FORCE_FINE_GRAIN_PCIE", "1")
+        env.setdefault("GPU_MAX_HEAP_SIZE", "95")
+        env["PYTORCH_CUDA_ALLOC_CONF"] = (
+            "max_split_size_mb:512,garbage_collection_threshold:0.8"
+        )
+        print("[*] ROCm memory allocator configured for stability")
+
     run_cmd([str(PYTHON_BIN), "-m", "src.server"], env=env)
 
 

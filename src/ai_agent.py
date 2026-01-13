@@ -65,6 +65,100 @@ def _patch_repeat_interleave_for_rocm():
 
 _patch_repeat_interleave_for_rocm()
 
+
+class GPUMemoryManager:
+    GPU_MEMORY_THRESHOLD = 0.90
+
+    @staticmethod
+    def get_gpu_memory_info() -> dict:
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return {"available": False}
+
+            allocated = torch.cuda.memory_allocated()
+            reserved = torch.cuda.memory_reserved()
+            total = torch.cuda.get_device_properties(0).total_memory
+            free = total - reserved
+
+            return {
+                "available": True,
+                "allocated_mb": allocated / (1024 * 1024),
+                "reserved_mb": reserved / (1024 * 1024),
+                "total_mb": total / (1024 * 1024),
+                "free_mb": free / (1024 * 1024),
+                "usage_ratio": reserved / total if total > 0 else 0,
+            }
+        except Exception as e:
+            return {"available": False, "error": str(e)}
+
+    @staticmethod
+    def synchronize():
+        """Synchronize GPU to prevent race conditions and ensure all operations complete."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except Exception:
+            pass
+
+    @staticmethod
+    def clear_cache():
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()  # Wait for all GPU ops before clearing
+                torch.cuda.empty_cache()
+                import gc
+
+                gc.collect()
+                print("[*] GPU cache cleared")
+        except Exception as e:
+            print(f"[!] Failed to clear GPU cache: {e}")
+
+    @staticmethod
+    def reset_device():
+        """Reset CUDA device after critical errors to recover from corrupted state."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                # Reset peak memory stats
+                torch.cuda.reset_peak_memory_stats()
+                # Reset accumulated memory stats
+                torch.cuda.reset_accumulated_memory_stats()
+                import gc
+
+                gc.collect()
+                print("[*] GPU device reset completed")
+        except Exception as e:
+            print(f"[!] Failed to reset GPU device: {e}")
+
+    @staticmethod
+    def check_memory_and_cleanup() -> bool:
+        info = GPUMemoryManager.get_gpu_memory_info()
+        if not info.get("available"):
+            return True
+
+        usage = info.get("usage_ratio", 0)
+        if usage > GPUMemoryManager.GPU_MEMORY_THRESHOLD:
+            print(f"[!] GPU memory usage high ({usage:.1%}), clearing cache...")
+            GPUMemoryManager.clear_cache()
+
+            new_info = GPUMemoryManager.get_gpu_memory_info()
+            new_usage = new_info.get("usage_ratio", 0)
+            print(f"[*] GPU memory after cleanup: {new_usage:.1%}")
+
+            return new_usage < GPUMemoryManager.GPU_MEMORY_THRESHOLD
+
+        return True
+
+
 from .config import CharacterConfig, SessionConfig, DATA_DIR, CONVERSATION_HISTORY_LIMIT
 from .vm_manager import VMManager
 from .memory import MemoryManager, ConversationHistory
@@ -169,18 +263,23 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
     </tool>
 
 ## Rules
-- You MUST use EXACTLY TWO tools per response: speak + one action tool
-- First tool: speak (tell user what you're about to do)
-- Second tool: the action you want to take
-- Example response format:
+- You MUST always include speak tool first, then action tool(s)
+- IMPORTANT: To click something, you MUST use cursor-tp BEFORE click!
+- Example for clicking a button at position (500, 300):
   <tool>
   name: speak
-  text: I'll click on the browser icon.
+  text: I'll click the Install button at coordinates (500, 300).
+  </tool>
+  <tool>
+  name: cursor-tp
+  x: 500
+  y: 300
   </tool>
   <tool>
   name: click
   button: left
   </tool>
+- Always specify exact pixel coordinates when clicking (estimate from the screen image)
 - Track your progress using the todo tool
 - When the task is complete, use speak + end tools together
 
@@ -324,30 +423,94 @@ class LLMProvider:
         if not self._processor or not self._model:
             raise RuntimeError("Model not initialized")
 
-        if self._is_vlm and image:
-            return self._generate_vlm(messages, image, max_tokens)
-        else:
-            return self._generate_text(messages, max_tokens)
+        if not GPUMemoryManager.check_memory_and_cleanup():
+            print("[!] GPU memory critically low, attempting reduced generation")
+
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                if self._is_vlm and image:
+                    return self._generate_vlm(messages, image, max_tokens)
+                else:
+                    return self._generate_text(messages, max_tokens)
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+                error_str = str(e).lower()
+                is_oom = "out of memory" in error_str or isinstance(
+                    e, torch.cuda.OutOfMemoryError
+                )
+                # Detect CUDA/HIP critical errors that require device reset
+                is_cuda_error = any(
+                    x in error_str
+                    for x in [
+                        "cuda error",
+                        "hip error",
+                        "device-side assert",
+                        "illegal memory access",
+                        "cublas",
+                        "cudnn",
+                    ]
+                )
+
+                if is_oom:
+                    print(f"[!] GPU OOM on attempt {attempt + 1}/{max_retries + 1}")
+                    GPUMemoryManager.clear_cache()
+
+                    if attempt == max_retries:
+                        print("[!] Max OOM retries reached, returning error message")
+                        return "<tool>\nname: speak\ntext: I encountered a memory issue. Please try restarting me.\n</tool>"
+
+                    max_tokens = max(256, max_tokens // 2)
+                    print(f"[*] Reducing max_tokens to {max_tokens}")
+                elif is_cuda_error:
+                    print(
+                        f"[!] CUDA/HIP error on attempt {attempt + 1}/{max_retries + 1}: {e}"
+                    )
+                    # Reset device to recover from corrupted GPU state
+                    GPUMemoryManager.reset_device()
+
+                    if attempt == max_retries:
+                        print(
+                            "[!] Max CUDA error retries reached, returning error message"
+                        )
+                        return "<tool>\nname: speak\ntext: I encountered a GPU error. Please try restarting me.\n</tool>"
+
+                    print("[*] GPU device reset, retrying...")
+                else:
+                    raise
 
     def _generate_vlm(
         self, messages: list[dict], image: Image.Image, max_tokens: int
     ) -> str:
         import torch
-
-        prompt = self._format_messages(messages)
+        import gc
 
         if "qwen3-vl" in self.model_name.lower():
             from qwen_vl_utils import process_vision_info
 
-            qwen_messages = [
+            qwen_messages = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+
+                if role == "system":
+                    qwen_messages.append({"role": "system", "content": content})
+                elif role == "assistant":
+                    qwen_messages.append({"role": "assistant", "content": content})
+                elif role == "user":
+                    qwen_messages.append({"role": "user", "content": content})
+
+            qwen_messages.append(
                 {
                     "role": "user",
                     "content": [
                         {"type": "image", "image": image},
-                        {"type": "text", "text": prompt},
+                        {
+                            "type": "text",
+                            "text": "This is the current screen. Take action based on your task and previous actions. Do NOT repeat the same action.",
+                        },
                     ],
                 }
-            ]
+            )
 
             text = self._processor.apply_chat_template(
                 qwen_messages, tokenize=False, add_generation_prompt=True
@@ -361,46 +524,72 @@ class LLMProvider:
                 return_tensors="pt",
             )
         else:
+            prompt = self._format_messages(messages)
             inputs = self._processor(text=prompt, images=image, return_tensors="pt")
 
         inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
 
-        with torch.no_grad():
-            outputs = self._model.generate(
-                **inputs, max_new_tokens=max_tokens, do_sample=True, temperature=0.7
+        # Synchronize before generation to ensure clean GPU state
+        GPUMemoryManager.synchronize()
+
+        try:
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    **inputs, max_new_tokens=max_tokens, do_sample=True, temperature=0.7
+                )
+
+            # Synchronize after generation to ensure completion
+            GPUMemoryManager.synchronize()
+
+            input_len = inputs.get(
+                "input_ids", inputs.get("input_token_ids", [[]])
+            ).shape[1]
+            response = self._processor.decode(
+                outputs[0][input_len:], skip_special_tokens=True
             )
 
-        input_len = inputs.get("input_ids", inputs.get("input_token_ids", [[]])).shape[
-            1
-        ]
-        response = self._processor.decode(
-            outputs[0][input_len:], skip_special_tokens=True
-        )
-
-        return response.strip()
+            return response.strip()
+        finally:
+            # Explicitly clean up tensors to prevent memory fragmentation
+            del inputs
+            gc.collect()
+            GPUMemoryManager.synchronize()
 
     def _generate_text(self, messages: list[dict], max_tokens: int) -> str:
         import torch
+        import gc
 
         prompt = self._format_messages(messages)
 
         inputs = self._processor(prompt, return_tensors="pt")
         inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
 
-        with torch.no_grad():
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=self._processor.eos_token_id,
+        # Synchronize before generation to ensure clean GPU state
+        GPUMemoryManager.synchronize()
+
+        try:
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=self._processor.eos_token_id,
+                )
+
+            # Synchronize after generation to ensure completion
+            GPUMemoryManager.synchronize()
+
+            response = self._processor.decode(
+                outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
             )
 
-        response = self._processor.decode(
-            outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
-        )
-
-        return response.strip()
+            return response.strip()
+        finally:
+            # Explicitly clean up tensors to prevent memory fragmentation
+            del inputs
+            gc.collect()
+            GPUMemoryManager.synchronize()
 
     def _format_messages(self, messages: list[dict]) -> str:
         formatted = []
@@ -534,7 +723,9 @@ class AIAgent:
             {"role": "system", "content": self._build_system_prompt()},
         ]
 
-        for msg in self.history.get_recent():
+        history_msgs = self.history.get_recent()
+        print(f"[DEBUG] History has {len(history_msgs)} messages")
+        for msg in history_msgs:
             messages.append(msg)
 
         messages.append(
@@ -551,16 +742,20 @@ class AIAgent:
         response = await self.llm.generate(messages, image=screen_image)
         elapsed = time.time() - start_time
         print(f"[+] LLM response generated in {elapsed:.1f}s")
+        print(f"[DEBUG] LLM response:\n{response[:500]}...")
 
         tool_calls = parse_tool_calls(response)
+        print(f"[DEBUG] Parsed {len(tool_calls)} tool(s): {[t[0] for t in tool_calls]}")
         tool_result = None
         tool_uses = []
 
         for tool_name, params in tool_calls:
+            print(f"[*] Executing tool: {tool_name} with params: {params}")
             if self._on_tool_callback:
                 await self._on_tool_callback(tool_name, params)
 
             tool_result = await self.tools.execute(tool_name, params)
+            print(f"[+] Tool result: {tool_result.message}")
             tool_uses.append(
                 {
                     "name": tool_name,

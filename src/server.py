@@ -91,19 +91,131 @@ async def get_character_image(name: str):
     return {"error": "No image"}
 
 
+@app.get("/api/sessions")
+async def get_active_sessions():
+    """List all active sessions (for debugging/admin)."""
+    result = []
+    for session_id, agent in active_sessions.items():
+        result.append(
+            {
+                "session_id": session_id,
+                "character": agent.config.character.name,
+                "task": agent.config.task[:100] if agent.config.task else "",
+                "running": agent._running,
+            }
+        )
+    return {"sessions": result}
+
+
+@app.get("/api/session/{session_id}")
+async def get_session(session_id: str):
+    """Check if a session exists and is still running."""
+    agent = active_sessions.get(session_id)
+    if not agent:
+        return {"exists": False}
+
+    return {
+        "exists": True,
+        "session_id": session_id,
+        "character": {
+            "name": agent.config.character.name,
+            "display_name": agent.config.character.display_name,
+            "has_image": agent.config.character.image_path is not None,
+        },
+        "task": agent.config.task,
+        "running": agent._running,
+    }
+
+
 @app.websocket("/ws/session")
 async def websocket_session(websocket: WebSocket):
     await websocket.accept()
 
     session_id = None
     agent: Optional[AIAgent] = None
+    is_reconnect = False  # Track if this is a reconnection
 
     try:
         while True:
             data = await websocket.receive_json()
             action = data.get("action")
 
-            if action == "start":
+            if action == "reconnect":
+                # Reconnect to an existing session
+                req_session_id = data.get("session_id")
+                if req_session_id and req_session_id in active_sessions:
+                    agent = active_sessions[req_session_id]
+                    session_id = req_session_id
+                    is_reconnect = True
+
+                    # Re-attach callbacks to new websocket
+                    async def on_speak(text: str):
+                        print(f"[WS] Sending speak: {text[:50]}...")
+                        try:
+                            await websocket.send_json({"type": "speak", "text": text})
+                        except Exception:
+                            pass
+
+                    async def on_tool(name: str, params: dict):
+                        print(f"[WS] Sending tool: {name}")
+                        try:
+                            await websocket.send_json(
+                                {"type": "tool", "name": name, "params": params}
+                            )
+                        except Exception:
+                            pass
+
+                    async def on_screen(b64_image: str):
+                        print(f"[WS] Sending screen ({len(b64_image)} bytes)")
+                        try:
+                            await websocket.send_json(
+                                {"type": "screen", "image": b64_image}
+                            )
+                        except Exception:
+                            pass
+
+                    agent.set_callbacks(
+                        on_speak=on_speak, on_tool=on_tool, on_screen=on_screen
+                    )
+
+                    # Send current state
+                    await websocket.send_json(
+                        {
+                            "type": "status",
+                            "status": "running",
+                            "session_id": session_id,
+                            "character": {
+                                "name": agent.config.character.name,
+                                "display_name": agent.config.character.display_name,
+                                "has_image": agent.config.character.image_path
+                                is not None,
+                            },
+                        }
+                    )
+
+                    # Send current screen
+                    if agent.vm:
+                        import base64
+                        from io import BytesIO
+
+                        try:
+                            current_screen = await agent.vm.capture_screen()
+                            buffer = BytesIO()
+                            current_screen.save(buffer, format="PNG")
+                            b64_image = base64.b64encode(buffer.getvalue()).decode()
+                            await websocket.send_json(
+                                {"type": "screen", "image": b64_image}
+                            )
+                        except Exception as e:
+                            print(f"[!] Failed to capture screen on reconnect: {e}")
+
+                    print(f"[+] Reconnected to session {session_id}")
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "message": "Session not found or expired"}
+                    )
+
+            elif action == "start":
                 char_config = load_character(data.get("character", "default"))
 
                 iso_name = data.get("iso_path")
@@ -127,15 +239,17 @@ async def websocket_session(websocket: WebSocket):
                 agent = AIAgent(session_config)
 
                 async def on_speak(text: str):
+                    print(f"[WS] Sending speak: {text[:50]}...")
                     await websocket.send_json({"type": "speak", "text": text})
 
                 async def on_tool(name: str, params: dict):
+                    print(f"[WS] Sending tool: {name}")
                     await websocket.send_json(
                         {"type": "tool", "name": name, "params": params}
                     )
 
                 async def on_screen(b64_image: str):
-                    print(f"[*] Sending screen to browser ({len(b64_image)} bytes)")
+                    print(f"[WS] Sending screen ({len(b64_image)} bytes)")
                     await websocket.send_json({"type": "screen", "image": b64_image})
 
                 agent.set_callbacks(
@@ -197,13 +311,15 @@ async def websocket_session(websocket: WebSocket):
                     await websocket.send_json({"type": "status", "status": "restarted"})
 
     except WebSocketDisconnect:
-        pass
+        print(f"[*] WebSocket disconnected for session {session_id}")
     finally:
-        if agent:
-            agent.stop()
-            await agent.stop_vm()
-        if session_id and session_id in active_sessions:
-            del active_sessions[session_id]
+        # Only cleanup if this was NOT a reconnectable session
+        # Keep the session alive for potential reconnection
+        if agent and not is_reconnect:
+            # Don't stop the agent/VM immediately - keep it for reconnection
+            # The session will be cleaned up by lifespan handler on server shutdown
+            # or can be stopped explicitly via the stop action
+            print(f"[*] Session {session_id} kept alive for reconnection")
 
 
 async def run_agent_loop(agent: AIAgent, websocket: WebSocket):
