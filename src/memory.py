@@ -24,19 +24,38 @@ class MemoryManager:
         self._initialized = True
 
     def _init_sync(self):
-        import lancedb
-        from sentence_transformers import SentenceTransformer
+        try:
+            import lancedb
+            from sentence_transformers import SentenceTransformer
 
-        db_path = DATA_DIR / "lancedb"
-        db_path.mkdir(parents=True, exist_ok=True)
+            db_path = DATA_DIR / "lancedb"
+            db_path.mkdir(parents=True, exist_ok=True)
 
-        self._db = lancedb.connect(str(db_path))
-        self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            self._db = lancedb.connect(str(db_path))
+            self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-        table_name = f"memory_{self.session_id}"
-        if table_name in self._db.table_names():
-            self._table = self._db.open_table(table_name)
-        else:
+            table_name = f"memory_{self.session_id}"
+            if table_name in self._db.table_names():
+                self._table = self._db.open_table(table_name)
+            else:
+                self._table = None
+
+            print("[+] Memory (LanceDB) initialized successfully")
+        except ImportError as e:
+            print(f"[!] Memory library not available: {e}")
+            print(
+                "[!] Memory disabled. Install with: pip install lancedb sentence-transformers"
+            )
+            self._db = None
+            self._embedder = None
+            self._table = None
+        except Exception as e:
+            print(f"[!] Failed to initialize memory: {e}")
+            import traceback
+
+            traceback.print_exc()
+            self._db = None
+            self._embedder = None
             self._table = None
 
     def _ensure_table(self):
@@ -53,6 +72,9 @@ class MemoryManager:
         await loop.run_in_executor(None, self._add_sync, content, metadata or {})
 
     def _add_sync(self, content: str, metadata: dict):
+        if not self._db or not self._embedder:
+            return
+
         doc_id = hashlib.md5(content.encode()).hexdigest()[:16]
         vector = self._embedder.encode(content).tolist()
 
@@ -79,7 +101,7 @@ class MemoryManager:
         return await loop.run_in_executor(None, self._search_sync, query, limit)
 
     def _search_sync(self, query: str, limit: int) -> list[dict]:
-        if self._table is None:
+        if self._table is None or not self._embedder:
             return []
 
         query_vector = self._embedder.encode(query).tolist()
@@ -105,6 +127,9 @@ class MemoryManager:
         await loop.run_in_executor(None, self._clear_sync)
 
     def _clear_sync(self):
+        if not self._db:
+            return
+
         table_name = f"memory_{self.session_id}"
         if table_name in self._db.table_names():
             self._db.drop_table(table_name)

@@ -164,7 +164,8 @@ class LLMProvider:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._init_sync)
         self._initialized = True
-        print(f"[+] Model loaded successfully on {self._device}")
+        if self._model is not None:
+            print(f"[+] Model loaded successfully on {self._device}")
 
     def _init_sync(self):
         import torch
@@ -193,7 +194,11 @@ class LLMProvider:
                 self._load_text_model(models_dir, dtype)
         except Exception as e:
             print(f"[!] Failed to load model: {e}")
-            raise
+            import traceback
+
+            traceback.print_exc()
+            self._model = None
+            self._processor = None
 
     def _load_vlm(self, models_dir: Path, dtype):
         from transformers import AutoProcessor, AutoModelForVision2Seq
@@ -466,7 +471,12 @@ class AIAgent:
         if not self.llm or not self.history or not self.tools:
             raise RuntimeError("Agent not initialized")
 
+        print("[*] Capturing screen...")
         screen_image, screen_b64 = await self._capture_screen()
+        if screen_image:
+            print(f"[+] Screen captured ({screen_image.width}x{screen_image.height})")
+        else:
+            print("[!] Failed to capture screen")
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._build_system_prompt()},
@@ -482,7 +492,13 @@ class AIAgent:
             }
         )
 
+        print("[*] Generating LLM response (this may take a while on CPU)...")
+        import time
+
+        start_time = time.time()
         response = await self.llm.generate(messages, image=screen_image)
+        elapsed = time.time() - start_time
+        print(f"[+] LLM response generated in {elapsed:.1f}s")
 
         tool_call = parse_tool_call(response)
         tool_result = None
@@ -511,12 +527,18 @@ class AIAgent:
 
     async def run(self) -> AsyncIterator[tuple[str, Optional[ToolResult]]]:
         self._running = True
+        print("[*] Agent loop started")
 
+        step = 0
         while self._running:
+            step += 1
+            print(f"\n{'=' * 50}")
+            print(f"[*] Agent step {step}")
             response, result = await self.run_step()
             yield response, result
 
             if result and not result.should_continue:
+                print(f"[*] Agent stopping: {result.message}")
                 break
 
             await asyncio.sleep(0.5)

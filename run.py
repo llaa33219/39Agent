@@ -45,7 +45,19 @@ def detect_gpu() -> str:
 
 
 def create_venv():
+    need_create = False
+
     if not VENV_DIR.exists():
+        need_create = True
+    elif not PYTHON_BIN.exists():
+        print("[!] Virtual environment is incomplete or corrupted")
+        print("[*] Removing and recreating...")
+        import shutil
+
+        shutil.rmtree(VENV_DIR)
+        need_create = True
+
+    if need_create:
         print("[*] Creating virtual environment...")
         subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
         print("[+] Virtual environment created at:", VENV_DIR)

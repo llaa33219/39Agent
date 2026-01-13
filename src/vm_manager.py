@@ -304,9 +304,11 @@ class VMManager:
         self._vnc_port = 5900
 
     async def start(self):
+        print("[*] Starting VM...")
         self._temp_dir = tempfile.TemporaryDirectory(prefix="39agent_")
         temp_path = Path(self._temp_dir.name)
 
+        print("[*] Creating virtual disk...")
         disk_path = temp_path / "disk.qcow2"
         subprocess.run(
             [
@@ -323,9 +325,40 @@ class VMManager:
 
         self._qmp_socket = str(temp_path / "qmp.sock")
 
-        ovmf_code = Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd")
-        ovmf_vars_src = Path("/usr/share/edk2/x64/OVMF_VARS.4m.fd")
-        ovmf_vars = temp_path / "OVMF_VARS.4m.fd"
+        # Find OVMF files (different paths on different distros)
+        ovmf_paths = [
+            # Fedora/RHEL
+            (
+                "/usr/share/edk2/x64/OVMF_CODE.4m.fd",
+                "/usr/share/edk2/x64/OVMF_VARS.4m.fd",
+            ),
+            # Ubuntu/Debian
+            ("/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"),
+            ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
+            # Arch Linux
+            (
+                "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+                "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
+            ),
+        ]
+
+        ovmf_code = None
+        ovmf_vars_src = None
+        for code_path, vars_path in ovmf_paths:
+            if Path(code_path).exists() and Path(vars_path).exists():
+                ovmf_code = Path(code_path)
+                ovmf_vars_src = Path(vars_path)
+                break
+
+        if not ovmf_code or not ovmf_vars_src:
+            raise RuntimeError(
+                "OVMF firmware not found. Install with:\n"
+                "  Ubuntu/Debian: sudo apt install ovmf\n"
+                "  Fedora: sudo dnf install edk2-ovmf\n"
+                "  Arch: sudo pacman -S edk2-ovmf"
+            )
+
+        ovmf_vars = temp_path / ovmf_vars_src.name
 
         import shutil
 
@@ -362,12 +395,15 @@ class VMManager:
         if self.config.iso_path:
             cmd.extend(["-cdrom", self.config.iso_path, "-boot", "d"])
 
+        print("[*] Launching QEMU...")
         self.process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
 
+        print("[*] Waiting for QEMU to start...")
         await self._wait_for_socket(self._qmp_socket, timeout=10.0)
 
+        print("[*] Connecting to QMP...")
         self.qmp = QMPClient(self._qmp_socket)
         try:
             await self.qmp.connect()
@@ -377,8 +413,10 @@ class VMManager:
                 raise RuntimeError(f"QEMU failed to start: {stderr.decode()}") from e
             raise
 
+        print("[*] Connecting to VNC...")
         self.vnc = VNCClient(port=self._vnc_port)
         await self.vnc.connect()
+        print(f"[+] VM started successfully (VNC: {self.vnc.width}x{self.vnc.height})")
 
     async def _wait_for_socket(self, socket_path: str, timeout: float = 10.0):
         start = asyncio.get_event_loop().time()

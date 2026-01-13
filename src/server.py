@@ -119,6 +119,7 @@ async def websocket_session(websocket: WebSocket):
                     )
 
                 async def on_screen(b64_image: str):
+                    print(f"[*] Sending screen to browser ({len(b64_image)} bytes)")
                     await websocket.send_json({"type": "screen", "image": b64_image})
 
                 agent.set_callbacks(
@@ -148,6 +149,17 @@ async def websocket_session(websocket: WebSocket):
                         },
                     }
                 )
+
+                print("[*] Sending initial screen...")
+                initial_screen = await agent.vm.capture_screen()
+                import base64
+                from io import BytesIO
+
+                buffer = BytesIO()
+                initial_screen.save(buffer, format="PNG")
+                b64_image = base64.b64encode(buffer.getvalue()).decode()
+                await websocket.send_json({"type": "screen", "image": b64_image})
+                print(f"[+] Initial screen sent ({len(b64_image)} bytes)")
 
                 asyncio.create_task(run_agent_loop(agent, websocket))
 
@@ -179,8 +191,10 @@ async def websocket_session(websocket: WebSocket):
 
 
 async def run_agent_loop(agent: AIAgent, websocket: WebSocket):
+    print("[*] run_agent_loop started")
     try:
         async for response, result in agent.run():
+            print(f"[*] Agent response received, sending to browser")
             await websocket.send_json(
                 {
                     "type": "agent_response",
@@ -194,6 +208,10 @@ async def run_agent_loop(agent: AIAgent, websocket: WebSocket):
                 }
             )
     except Exception as e:
+        print(f"[!] Agent loop error: {e}")
+        import traceback
+
+        traceback.print_exc()
         await websocket.send_json({"type": "error", "message": str(e)})
 
 
