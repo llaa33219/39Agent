@@ -174,8 +174,23 @@ async def websocket_session(websocket: WebSocket):
                         except Exception:
                             pass
 
+                    async def on_audio(audio_data: bytes):
+                        import base64
+
+                        b64_audio = base64.b64encode(audio_data).decode()
+                        # print(f"[WS] Sending audio ({len(b64_audio)} bytes)")
+                        try:
+                            await websocket.send_json(
+                                {"type": "audio", "audio": b64_audio}
+                            )
+                        except Exception:
+                            pass
+
                     agent.set_callbacks(
-                        on_speak=on_speak, on_tool=on_tool, on_screen=on_screen
+                        on_speak=on_speak,
+                        on_tool=on_tool,
+                        on_screen=on_screen,
+                        on_audio=on_audio,
                     )
 
                     # Send current state
@@ -252,8 +267,18 @@ async def websocket_session(websocket: WebSocket):
                     print(f"[WS] Sending screen ({len(b64_image)} bytes)")
                     await websocket.send_json({"type": "screen", "image": b64_image})
 
+                async def on_audio(audio_data: bytes):
+                    import base64
+
+                    b64_audio = base64.b64encode(audio_data).decode()
+                    # print(f"[WS] Sending audio ({len(b64_audio)} bytes)")
+                    await websocket.send_json({"type": "audio", "audio": b64_audio})
+
                 agent.set_callbacks(
-                    on_speak=on_speak, on_tool=on_tool, on_screen=on_screen
+                    on_speak=on_speak,
+                    on_tool=on_tool,
+                    on_screen=on_screen,
+                    on_audio=on_audio,
                 )
 
                 await websocket.send_json({"type": "status", "status": "initializing"})

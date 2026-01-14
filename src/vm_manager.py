@@ -190,13 +190,25 @@ class QMPClient:
             },
         )
 
-    async def send_mouse_move(self, x: int, y: int):
+    async def send_mouse_move_relative(self, x: int, y: int):
         await self.execute(
             "input-send-event",
             {
                 "events": [
                     {"type": "rel", "data": {"axis": "x", "value": x}},
                     {"type": "rel", "data": {"axis": "y", "value": y}},
+                ]
+            },
+        )
+
+    async def send_mouse_move_absolute(self, x: int, y: int):
+        # QEMU usb-tablet uses 0-0x7FFF range
+        await self.execute(
+            "input-send-event",
+            {
+                "events": [
+                    {"type": "abs", "data": {"axis": "x", "value": x}},
+                    {"type": "abs", "data": {"axis": "y", "value": y}},
                 ]
             },
         )
@@ -659,7 +671,7 @@ class VMManager:
         while dx != 0 or dy != 0:
             chunk_x = max(-step, min(step, dx))
             chunk_y = max(-step, min(step, dy))
-            await self.qmp.send_mouse_move(chunk_x, chunk_y)
+            await self.qmp.send_mouse_move_relative(chunk_x, chunk_y)
             dx -= chunk_x
             dy -= chunk_y
             await asyncio.sleep(0.005)
@@ -667,20 +679,32 @@ class VMManager:
     async def move_cursor_to(self, x: int, y: int):
         if not self.qmp:
             raise RuntimeError("VM not started")
+
         target_x = max(0, min(x, self.config.width - 1))
         target_y = max(0, min(y, self.config.height - 1))
+
         print(f"[VM] Moving cursor to ({target_x}, {target_y})")
-        await self._send_mouse_move_chunked(
-            -self.config.width - 100, -self.config.height - 100
-        )
-        await asyncio.sleep(0.02)
+
+        # Reset to (0,0) with multiple aggressive moves
+        # USB mouse is relative, so we slam it to the top-left corner
+        for _ in range(3):
+            await self._send_mouse_move_chunked(
+                -self.config.width * 2, -self.config.height * 2, step=200
+            )
+            await asyncio.sleep(0.01)
+
+        await asyncio.sleep(0.05)
+
+        # Move to target
         await self._send_mouse_move_chunked(target_x, target_y)
+
         self._cursor_x = target_x
         self._cursor_y = target_y
 
     async def move_cursor_relative(self, dx: int, dy: int):
         if not self.qmp:
             raise RuntimeError("VM not started")
+
         await self._send_mouse_move_chunked(dx, dy)
         self._cursor_x = max(0, min(self._cursor_x + dx, self.config.width - 1))
         self._cursor_y = max(0, min(self._cursor_y + dy, self.config.height - 1))

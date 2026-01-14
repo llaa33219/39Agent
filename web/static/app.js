@@ -250,6 +250,10 @@ function handleMessage(data) {
             updateScreen(data.image);
             break;
             
+        case 'audio':
+            playAudio(data.audio);
+            break;
+            
         case 'speak':
             updateSpeech(data.text);
             break;
@@ -319,6 +323,52 @@ function updateScreen(base64Image) {
     img.src = `data:image/png;base64,${base64Image}`;
     img.classList.add('visible');
     noScreen.style.display = 'none';
+}
+
+// Audio queue to play messages sequentially
+const audioQueue = [];
+let isPlaying = false;
+
+async function playAudio(base64Audio) {
+    const audioData = atob(base64Audio);
+    const arrayBuffer = new ArrayBuffer(audioData.length);
+    const view = new Uint8Array(arrayBuffer);
+    for (let i = 0; i < audioData.length; i++) {
+        view[i] = audioData.charCodeAt(i);
+    }
+    
+    // Simple queueing
+    audioQueue.push(arrayBuffer);
+    if (!isPlaying) {
+        processAudioQueue();
+    }
+}
+
+async function processAudioQueue() {
+    if (audioQueue.length === 0) {
+        isPlaying = false;
+        return;
+    }
+    
+    isPlaying = true;
+    const audioData = audioQueue.shift();
+    
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await audioContext.decodeAudioData(audioData);
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        
+        source.onended = () => {
+            processAudioQueue();
+        };
+        
+        source.start(0);
+    } catch (e) {
+        console.error("Audio playback error:", e);
+        processAudioQueue();
+    }
 }
 
 function updateSpeech(text) {

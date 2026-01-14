@@ -265,7 +265,9 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
 
 ## Rules
 - You MUST always include speak tool first, then action tool(s)
-- IMPORTANT: To click something, you MUST use cursor-tp BEFORE click!
+- CRITICAL: To click something, you MUST use cursor-tp BEFORE click!
+- NEVER click without setting the position first. Mindless clicking is strictly forbidden.
+- Always double-check the coordinates from the screen image before moving the cursor.
 - IMPORTANT: cursor-tp has positioning errors. After cursor-tp, use cursor-move for fine adjustment if needed.
 - Example for clicking a button at position (500, 300):
   <tool>
@@ -287,7 +289,7 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
   button: left
   </tool>
 - Prefer cursor-move for small adjustments (more accurate than cursor-tp)
-- Always specify exact pixel coordinates when clicking (estimate from the screen image)
+- Always specify exact pixel coordinates when clicking. Do not guess; look at the image carefully.
 - Track your progress using the todo tool
 - When the task is complete, use speak + end tools together
 
@@ -637,10 +639,12 @@ class AIAgent:
         on_speak: Optional[Callable[[str], Awaitable[None]]] = None,
         on_tool: Optional[Callable[[str, dict], Awaitable[None]]] = None,
         on_screen: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_audio: Optional[Callable[[bytes], Awaitable[None]]] = None,
     ):
         self._on_speak_callback = on_speak
         self._on_tool_callback = on_tool
         self._on_screen_callback = on_screen
+        self._on_audio_callback = on_audio
 
     async def initialize(self):
         self.llm = LLMProvider(self.config.character.llm_model)
@@ -716,6 +720,20 @@ class AIAgent:
 
         return screen, b64_image
 
+    async def _process_audio_queue(self):
+        """Monitor TTS queue and send audio to frontend."""
+        while self._running:
+            try:
+                if self.tts:
+                    audio_data = await self.tts.get_next_audio()
+                    if audio_data and self._on_audio_callback:
+                        await self._on_audio_callback(audio_data)
+
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                print(f"[!] Error in audio loop: {e}")
+                await asyncio.sleep(1)
+
     async def run_step(self) -> tuple[str, Optional[ToolResult]]:
         if not self.llm or not self.history or not self.tools:
             raise RuntimeError("Agent not initialized")
@@ -788,6 +806,10 @@ class AIAgent:
 
     async def run(self) -> AsyncIterator[tuple[str, Optional[ToolResult]]]:
         self._running = True
+
+        # Start audio monitoring loop
+        audio_task = asyncio.create_task(self._process_audio_queue())
+
         print("[*] Agent loop started")
 
         step = 0

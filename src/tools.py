@@ -108,11 +108,13 @@ class ToolExecutor:
     async def _tool_speak(self, params: dict) -> ToolResult:
         text = params.get("text", "")
 
-        if self.on_speak:
-            await self.on_speak(text)
-
+        # 1. Generate Audio First (Blocking/Async wait)
         if self.tts:
             await self.tts.speak(text)
+
+        # 2. Then reflect to UI (Text + Audio queued)
+        if self.on_speak:
+            await self.on_speak(text)
 
         return ToolResult(True, f"Spoke: {text[:50]}...")
 
