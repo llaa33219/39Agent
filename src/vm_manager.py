@@ -194,21 +194,17 @@ class QMPClient:
         await self.execute(
             "input-send-event",
             {
-                "device": "mouse0",
                 "events": [
                     {"type": "rel", "data": {"axis": "x", "value": x}},
                     {"type": "rel", "data": {"axis": "y", "value": y}},
-                ],
+                ]
             },
         )
 
     async def send_mouse_button(self, button: str, down: bool):
         await self.execute(
             "input-send-event",
-            {
-                "device": "mouse0",
-                "events": [{"type": "btn", "data": {"down": down, "button": button}}],
-            },
+            {"events": [{"type": "btn", "data": {"down": down, "button": button}}]},
         )
 
     async def close(self):
@@ -392,6 +388,13 @@ class VNCClient:
 
         return image
 
+    async def send_pointer_event(self, x: int, y: int, button_mask: int = 0):
+        if not self._writer:
+            raise RuntimeError("Not connected")
+        msg = struct.pack(">BBHH", 5, button_mask, x, y)
+        self._writer.write(msg)
+        await self._writer.drain()
+
     async def close(self):
         if self._writer:
             self._writer.close()
@@ -407,6 +410,9 @@ class VMManager:
         self._temp_dir: Optional[tempfile.TemporaryDirectory] = None
         self._qmp_socket: Optional[str] = None
         self._vnc_port = 5900
+        self._cursor_x = 0
+        self._cursor_y = 0
+        self._button_mask = 0
 
     async def start(self):
         print("[*] Starting VM...")
@@ -484,8 +490,8 @@ class VMManager:
             f"if=pflash,format=raw,file={ovmf_vars}",
             "-drive",
             f"file={disk_path},format=qcow2,if=virtio",
-            "-device",
-            f"qxl-vga,vgamem_mb={self.config.vram_mb},xres={self.config.width},yres={self.config.height}",
+            "-vga",
+            "std",
             "-vnc",
             f"127.0.0.1:{self._vnc_port - 5900}",
             "-qmp",
@@ -494,7 +500,7 @@ class VMManager:
             "none",
             "-usb",
             "-device",
-            "usb-mouse,id=mouse0",
+            "usb-mouse",
         ]
 
         if self.config.iso_path:
@@ -649,19 +655,35 @@ class VMManager:
 
             await asyncio.sleep(0.03)
 
+    async def _send_mouse_move_chunked(self, dx: int, dy: int, step: int = 100):
+        while dx != 0 or dy != 0:
+            chunk_x = max(-step, min(step, dx))
+            chunk_y = max(-step, min(step, dy))
+            await self.qmp.send_mouse_move(chunk_x, chunk_y)
+            dx -= chunk_x
+            dy -= chunk_y
+            await asyncio.sleep(0.005)
+
     async def move_cursor_to(self, x: int, y: int):
         if not self.qmp:
             raise RuntimeError("VM not started")
-
-        print(f"[VM] Moving cursor to ({x}, {y})")
-        await self.qmp.send_mouse_move(-self.config.width * 2, -self.config.height * 2)
+        target_x = max(0, min(x, self.config.width - 1))
+        target_y = max(0, min(y, self.config.height - 1))
+        print(f"[VM] Moving cursor to ({target_x}, {target_y})")
+        await self._send_mouse_move_chunked(
+            -self.config.width - 100, -self.config.height - 100
+        )
         await asyncio.sleep(0.02)
-        await self.qmp.send_mouse_move(x, y)
+        await self._send_mouse_move_chunked(target_x, target_y)
+        self._cursor_x = target_x
+        self._cursor_y = target_y
 
     async def move_cursor_relative(self, dx: int, dy: int):
         if not self.qmp:
             raise RuntimeError("VM not started")
-        await self.qmp.send_mouse_move(dx, dy)
+        await self._send_mouse_move_chunked(dx, dy)
+        self._cursor_x = max(0, min(self._cursor_x + dx, self.config.width - 1))
+        self._cursor_y = max(0, min(self._cursor_y + dy, self.config.height - 1))
 
     async def click(self, button: str = "left"):
         if not self.qmp:

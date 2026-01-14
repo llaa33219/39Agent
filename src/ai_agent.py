@@ -199,14 +199,15 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
    text: Hello World
    </tool>
 
-4. cursor-tp - Move cursor to absolute position (screen is {width}x{height})
+4. cursor-tp - Move cursor to approximate absolute position (screen is {width}x{height})
+   NOTE: cursor-tp may have slight positioning errors. Use cursor-move after cursor-tp for fine adjustment.
    <tool>
    name: cursor-tp
    x: 640
    y: 360
    </tool>
 
-5. cursor-move - Move cursor relative to current position
+5. cursor-move - Move cursor relative to current position (MORE ACCURATE than cursor-tp)
    <tool>
    name: cursor-move
    dx: 100
@@ -265,6 +266,7 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
 ## Rules
 - You MUST always include speak tool first, then action tool(s)
 - IMPORTANT: To click something, you MUST use cursor-tp BEFORE click!
+- IMPORTANT: cursor-tp has positioning errors. After cursor-tp, use cursor-move for fine adjustment if needed.
 - Example for clicking a button at position (500, 300):
   <tool>
   name: speak
@@ -276,9 +278,15 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
   y: 300
   </tool>
   <tool>
+  name: cursor-move
+  dx: 0
+  dy: 0
+  </tool>
+  <tool>
   name: click
   button: left
   </tool>
+- Prefer cursor-move for small adjustments (more accurate than cursor-tp)
 - Always specify exact pixel coordinates when clicking (estimate from the screen image)
 - Track your progress using the todo tool
 - When the task is complete, use speak + end tools together
