@@ -118,6 +118,21 @@ def get_python_version() -> tuple[int, int]:
     return sys.version_info[:2]
 
 
+def unpin_version(requirement: str) -> str:
+    """Remove exact version pins (==) from a requirement, keep >= constraints."""
+    import re
+
+    # Extract package name and any environment markers
+    # Pattern: package==version; markers  OR  package==version
+    match = re.match(r"^([a-zA-Z0-9_-]+)\s*==\s*[^;]+(;.*)?$", requirement.strip())
+    if match:
+        pkg_name = match.group(1)
+        markers = match.group(2) or ""
+        return f"{pkg_name}{markers}\n"
+
+    return requirement
+
+
 def create_compatible_requirements(original_file: Path, temp_file: Path) -> None:
     """Create a modified requirements file compatible with current Python version."""
     py_version = get_python_version()
@@ -135,43 +150,32 @@ def create_compatible_requirements(original_file: Path, temp_file: Path) -> None
             continue
 
         # Skip extra index URLs - they cause conflicts with uv
-        # We'll use default PyPI which has all the packages we need
-        if stripped.startswith("--extra-index-url"):
-            print(f"[*] Skipping extra index URL (using PyPI): {stripped[:60]}...")
+        if stripped.startswith("--extra-index-url") or stripped.startswith(
+            "--index-url"
+        ):
+            print(f"[*] Skipping index URL (using PyPI): {stripped[:50]}...")
             continue
 
-        # Python 3.13+ compatibility fixes
+        # Skip packages that don't work with Python 3.13+
         if py_version >= (3, 13):
-            # onnxruntime-gpu 1.18.0 doesn't have Python 3.13 wheels
-            # Replace with CPU version (still provides inference, just slower)
-            if "onnxruntime-gpu" in stripped:
-                # Use latest onnxruntime (CPU) - compatible with Python 3.13
-                filtered_lines.append("onnxruntime\n")
-                print(
-                    f"[*] Python {py_version[0]}.{py_version[1]}: Replacing onnxruntime-gpu with onnxruntime (CPU)"
-                )
-                continue
-
-            # Skip pinned onnxruntime version too (for non-Linux platforms)
-            if stripped.startswith("onnxruntime=="):
-                filtered_lines.append("onnxruntime\n")
-                continue
-
-            # deepspeed may have issues with Python 3.13
+            # deepspeed has build issues
             if "deepspeed" in stripped:
-                print(
-                    f"[*] Python {py_version[0]}.{py_version[1]}: Skipping deepspeed (optional, may not build)"
-                )
+                print(f"[*] Skipping deepspeed (build issues on 3.13)")
                 continue
-
-            # tensorrt packages don't have 3.13 support
+            # tensorrt packages don't have 3.13 wheels yet
             if "tensorrt" in stripped:
-                print(
-                    f"[*] Python {py_version[0]}.{py_version[1]}: Skipping tensorrt (no 3.13 wheels)"
-                )
+                print(f"[*] Skipping tensorrt (no 3.13 wheels)")
                 continue
 
-        filtered_lines.append(line)
+        # Remove ALL exact version pins (==) - use latest compatible versions
+        if "==" in stripped:
+            unpinned = unpin_version(stripped)
+            if unpinned != stripped:
+                pkg_name = stripped.split("==")[0].split("[")[0].strip()
+                print(f"[*] Unpinning: {pkg_name}")
+            filtered_lines.append(unpinned)
+        else:
+            filtered_lines.append(line)
 
     with open(temp_file, "w") as f:
         f.writelines(filtered_lines)
@@ -231,13 +235,52 @@ def install_dependencies():
     critical_packages = [
         ("conformer", "conformer"),
         ("diffusers", "diffusers"),
-        ("onnxruntime", "onnxruntime"),
         ("modelscope", "modelscope"),
         ("hyperpyyaml", "HyperPyYAML"),
         ("whisper", "openai-whisper"),  # Required for voice cloning
         ("inflect", "inflect"),  # Text normalization
         ("librosa", "librosa"),  # Audio processing
     ]
+
+    # Install onnxruntime-gpu on Linux for GPU acceleration
+    import platform
+
+    if platform.system() == "Linux":
+        try:
+            import onnxruntime
+
+            providers = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" not in providers:
+                raise ImportError("No CUDA support")
+        except (ImportError, Exception):
+            print("[*] Installing onnxruntime-gpu for CUDA support...")
+            if uv_path:
+                run_command(
+                    [
+                        uv_path,
+                        "pip",
+                        "install",
+                        "--python",
+                        sys.executable,
+                        "onnxruntime-gpu",
+                    ],
+                    check=False,
+                )
+            else:
+                run_command(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "onnxruntime-gpu",
+                        "--quiet",
+                    ],
+                    check=False,
+                )
+    else:
+        # CPU version for non-Linux
+        critical_packages.append(("onnxruntime", "onnxruntime"))
 
     for import_name, pkg_name in critical_packages:
         try:
