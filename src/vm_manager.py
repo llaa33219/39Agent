@@ -426,6 +426,28 @@ class VMManager:
         self._cursor_y = 0
         self._button_mask = 0
 
+    def _kill_port_user(self, port: int) -> bool:
+        """Kill any process using the specified port. Returns True if killed."""
+        for cmd, parse_fn in [
+            (["lsof", "-ti", f":{port}"], lambda r: r.stdout.strip().split("\n")),
+            (
+                ["fuser", f"{port}/tcp"],
+                lambda r: [p for p in r.stderr.strip().split() if p.isdigit()],
+            ),
+        ]:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    pids = parse_fn(result)
+                    for pid in filter(None, pids):
+                        print(f"[*] Killing process {pid} using port {port}")
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+                    if pids:
+                        return True
+            except FileNotFoundError:
+                continue
+        return False
+
     async def start(self):
         print("[*] Starting VM...")
         self._temp_dir = tempfile.TemporaryDirectory(prefix="39agent_")
@@ -486,6 +508,8 @@ class VMManager:
         import shutil
 
         shutil.copy(ovmf_vars_src, ovmf_vars)
+
+        self._kill_port_user(self._vnc_port)
 
         cmd = [
             "qemu-system-x86_64",
