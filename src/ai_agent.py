@@ -331,8 +331,17 @@ class LLMProvider:
         models_dir = DATA_DIR / "llm_models"
         models_dir.mkdir(parents=True, exist_ok=True)
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if self._device == "cuda" else torch.float32
+        # Get LLM device from gpu_utils
+        try:
+            from .gpu_utils import get_llm_device, print_gpu_info
+
+            print_gpu_info()
+            self._device = get_llm_device()
+        except ImportError:
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        use_gpu = self._device != "cpu"
+        dtype = torch.float16 if use_gpu else torch.float32
 
         vlm_keywords = [
             "qwen3-vl",
@@ -367,6 +376,15 @@ class LLMProvider:
             self.model_name, cache_dir=str(models_dir), trust_remote_code=True
         )
 
+        # Determine device_map based on LLM device
+        if self._device == "cpu":
+            device_map = None
+        elif ":" in self._device:
+            # Specific GPU like "cuda:0" - use that device
+            device_map = {"": self._device}
+        else:
+            device_map = "auto"
+
         if "qwen3-vl" in self.model_name.lower():
             from transformers import Qwen3VLForConditionalGeneration
 
@@ -374,7 +392,7 @@ class LLMProvider:
                 self.model_name,
                 cache_dir=str(models_dir),
                 torch_dtype=dtype,
-                device_map="auto" if self._device == "cuda" else None,
+                device_map=device_map,
                 low_cpu_mem_usage=False,
                 trust_remote_code=True,
             )
@@ -383,7 +401,7 @@ class LLMProvider:
                 self.model_name,
                 cache_dir=str(models_dir),
                 torch_dtype=dtype,
-                device_map="auto" if self._device == "cuda" else None,
+                device_map=device_map,
                 low_cpu_mem_usage=False,
                 trust_remote_code=True,
             )
@@ -415,18 +433,32 @@ class LLMProvider:
         self,
         messages: list[dict],
         image: Optional[Image.Image] = None,
+        video_frames: Optional[list[Image.Image]] = None,
         max_tokens: int = 1024,
     ) -> str:
+        """
+        Generate response from LLM.
+
+        Args:
+            messages: Chat messages
+            image: Single image (legacy support)
+            video_frames: List of video frames (preferred for temporal context)
+            max_tokens: Maximum tokens to generate
+        """
         if not self._initialized:
             await self.initialize()
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, self._generate_sync, messages, image, max_tokens
+            None, self._generate_sync, messages, image, video_frames, max_tokens
         )
 
     def _generate_sync(
-        self, messages: list[dict], image: Optional[Image.Image], max_tokens: int
+        self,
+        messages: list[dict],
+        image: Optional[Image.Image],
+        video_frames: Optional[list[Image.Image]],
+        max_tokens: int,
     ) -> str:
         import torch
 
@@ -439,8 +471,8 @@ class LLMProvider:
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
-                if self._is_vlm and image:
-                    return self._generate_vlm(messages, image, max_tokens)
+                if self._is_vlm and (image or video_frames):
+                    return self._generate_vlm(messages, image, video_frames, max_tokens)
                 else:
                     return self._generate_text(messages, max_tokens)
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
@@ -489,7 +521,11 @@ class LLMProvider:
                     raise
 
     def _generate_vlm(
-        self, messages: list[dict], image: Image.Image, max_tokens: int
+        self,
+        messages: list[dict],
+        image: Optional[Image.Image],
+        video_frames: Optional[list[Image.Image]],
+        max_tokens: int,
     ) -> str:
         import torch
         import gc
@@ -509,16 +545,32 @@ class LLMProvider:
                 elif role == "user":
                     qwen_messages.append({"role": "user", "content": content})
 
+            # Build vision content - prefer video frames over single image
+            if video_frames and len(video_frames) > 0:
+                # Use video frames for temporal context
+                vision_content = [
+                    {"type": "video", "video": video_frames, "fps": 1.0},
+                    {
+                        "type": "text",
+                        "text": "These are the recent screen frames (oldest to newest). Analyze the progression and take the next action based on your task. Do NOT repeat the same action.",
+                    },
+                ]
+            elif image:
+                # Fallback to single image
+                vision_content = [
+                    {"type": "image", "image": image},
+                    {
+                        "type": "text",
+                        "text": "This is the current screen. Take action based on your task and previous actions. Do NOT repeat the same action.",
+                    },
+                ]
+            else:
+                raise ValueError("No image or video frames provided")
+
             qwen_messages.append(
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {
-                            "type": "text",
-                            "text": "This is the current screen. Take action based on your task and previous actions. Do NOT repeat the same action.",
-                        },
-                    ],
+                    "content": vision_content,
                 }
             )
 
@@ -619,6 +671,11 @@ class LLMProvider:
 
 
 class AIAgent:
+    # Number of frames to capture for video context
+    FRAME_BUFFER_SIZE = 6
+    # Interval between frame captures (seconds)
+    FRAME_CAPTURE_INTERVAL = 0.5
+
     def __init__(self, session_config: SessionConfig):
         self.config = session_config
         self.vm: Optional[VMManager] = None
@@ -633,6 +690,9 @@ class AIAgent:
         self._on_speak_callback: Optional[Callable[[str], Awaitable[None]]] = None
         self._on_tool_callback: Optional[Callable[[str, dict], Awaitable[None]]] = None
         self._on_screen_callback: Optional[Callable[[str], Awaitable[None]]] = None
+
+        # Frame buffer for video context
+        self._frame_buffer: list[Image.Image] = []
 
     def set_callbacks(
         self,
@@ -734,12 +794,39 @@ class AIAgent:
                 print(f"[!] Error in audio loop: {e}")
                 await asyncio.sleep(1)
 
+    async def _capture_video_frames(self) -> list[Image.Image]:
+        """
+        Capture multiple frames for video context.
+
+        Captures FRAME_BUFFER_SIZE frames with FRAME_CAPTURE_INTERVAL between each.
+        Returns frames in chronological order (oldest first).
+        """
+        frames = []
+
+        print(f"[*] Capturing {self.FRAME_BUFFER_SIZE} frames for video context...")
+
+        for i in range(self.FRAME_BUFFER_SIZE):
+            screen_image, screen_b64 = await self._capture_screen()
+            if screen_image:
+                frames.append(screen_image)
+
+            # Don't wait after the last frame
+            if i < self.FRAME_BUFFER_SIZE - 1:
+                await asyncio.sleep(self.FRAME_CAPTURE_INTERVAL)
+
+        print(f"[+] Captured {len(frames)} frames")
+        return frames
+
     async def run_step(self) -> tuple[str, Optional[ToolResult]]:
         if not self.llm or not self.history or not self.tools:
             raise RuntimeError("Agent not initialized")
 
-        print("[*] Capturing screen...")
-        screen_image, screen_b64 = await self._capture_screen()
+        # Capture 6 frames for video context before LLM processing
+        video_frames = await self._capture_video_frames()
+
+        # Use the last frame as the primary image for legacy compatibility
+        screen_image = video_frames[-1] if video_frames else None
+
         if screen_image:
             print(f"[+] Screen captured ({screen_image.width}x{screen_image.height})")
         else:
@@ -757,7 +844,7 @@ class AIAgent:
         messages.append(
             {
                 "role": "user",
-                "content": "[Current VM screen is attached. Analyze and take action.]",
+                "content": "[Video frames of VM screen are attached. Analyze the progression and take the next action.]",
             }
         )
 
@@ -765,7 +852,10 @@ class AIAgent:
         import time
 
         start_time = time.time()
-        response = await self.llm.generate(messages, image=screen_image)
+        # Pass video frames for temporal context
+        response = await self.llm.generate(
+            messages, image=screen_image, video_frames=video_frames
+        )
         elapsed = time.time() - start_time
         print(f"[+] LLM response generated in {elapsed:.1f}s")
         print(f"[DEBUG] LLM response:\n{response[:500]}...")

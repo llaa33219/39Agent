@@ -202,49 +202,36 @@ def install_dependencies(uv: str) -> None:
             ]
         )
 
-    if gpu_type == "nvidia":
-        print("[*] Installing llama-cpp-python with CUDA support...")
-        env = os.environ.copy()
-        env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-        run_cmd(
-            [
-                uv,
-                "pip",
-                "install",
-                "--python",
-                str(PYTHON_BIN),
-                "llama-cpp-python",
-                "--reinstall",
-                "--no-cache",
-            ],
-            env=env,
-        )
-
     marker_file.touch()
     print("[+] Dependencies installed successfully")
 
 
-def check_espeak() -> bool:
-    try:
-        result = run_cmd(
-            ["espeak", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if result.returncode == 0:
-            print("[+] espeak found")
-            return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+def ensure_cosyvoice() -> bool:
+    cosyvoice_dir = ROOT_DIR / "data" / "cosyvoice"
+    model_dir = cosyvoice_dir / "pretrained_models" / "Fun-CosyVoice3-0.5B"
 
-    print("[!] WARNING: espeak not found!")
-    print("    espeak is required for TTS. Please install:")
-    print("    - Ubuntu/Debian: sudo apt install espeak")
-    print("    - macOS: brew install espeak")
-    print("    - Fedora: sudo dnf install espeak")
-    return False
+    if model_dir.exists() and (model_dir / "llm.pt").exists():
+        print("[+] CosyVoice TTS model found")
+        return True
+
+    print("[*] CosyVoice TTS model not found. Installing...")
+    install_script = ROOT_DIR / "scripts" / "install_cosyvoice.py"
+
+    if not install_script.exists():
+        print("[!] Install script not found. TTS will not work.")
+        return False
+
+    result = run_cmd(
+        [str(PYTHON_BIN), str(install_script)],
+        check=False,
+    )
+
+    if result.returncode != 0:
+        print("[!] CosyVoice installation failed. TTS will not work.")
+        return False
+
+    print("[+] CosyVoice installed successfully")
+    return True
 
 
 def check_qemu() -> bool:
@@ -282,11 +269,9 @@ def main():
     create_venv(uv)
     install_dependencies(uv)
 
-    espeak_ok = check_espeak()
-    if not espeak_ok:
-        response = input(
-            "\nContinue without espeak? (TTS features will not work) [y/N]: "
-        )
+    cosyvoice_ok = ensure_cosyvoice()
+    if not cosyvoice_ok:
+        response = input("\nContinue without TTS? (Voice output will not work) [y/N]: ")
         if response.lower() != "y":
             sys.exit(1)
 

@@ -1,183 +1,212 @@
+"""
+TTS Engine using CosyVoice3.
+
+Supports:
+- Zero-shot voice cloning from reference audio
+- Multi-GPU setup (uses TTS device from gpu_utils)
+- Streaming audio generation
+"""
+
 import asyncio
-import os
-import platform
-import glob
-import warnings
-from typing import Optional, Generator
-from pathlib import Path
+import sys
 from io import BytesIO
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
+from .config import DATA_DIR
 
-def _configure_espeak_library():
-    if platform.system() != "Darwin":
-        return
 
-    search_paths = [
-        "/opt/homebrew/Cellar/espeak/*/lib/libespeak.*.dylib",
-        "/usr/local/Cellar/espeak/*/lib/libespeak.*.dylib",
+# CosyVoice paths
+COSYVOICE_DIR = DATA_DIR / "cosyvoice"
+COSYVOICE_REPO = COSYVOICE_DIR / "CosyVoice"
+COSYVOICE_MODEL_DIR = COSYVOICE_DIR / "pretrained_models" / "Fun-CosyVoice3-0.5B"
+MATCHA_TTS_PATH = COSYVOICE_REPO / "third_party" / "Matcha-TTS"
+
+
+def _setup_cosyvoice_paths():
+    """Add CosyVoice paths to sys.path if not already present."""
+    paths_to_add = [
+        str(COSYVOICE_REPO),
+        str(MATCHA_TTS_PATH),
     ]
-
-    for pattern in search_paths:
-        matches = glob.glob(pattern)
-        if matches:
-            try:
-                from phonemizer.backend.espeak.wrapper import EspeakWrapper
-
-                EspeakWrapper.set_library(matches[0])
-                return
-            except Exception:
-                pass
-
-
-_configure_espeak_library()
+    for path in paths_to_add:
+        if path not in sys.path and Path(path).exists():
+            sys.path.insert(0, path)
 
 
 class TTSEngine:
+    """
+    TTS Engine using CosyVoice3 for high-quality voice synthesis.
+
+    Supports zero-shot voice cloning when voice_file is provided.
+    """
+
+    # Default sample rate for CosyVoice3
+    DEFAULT_SAMPLE_RATE = 24000
+
     def __init__(
-        self, voice_file: Optional[str] = None, voice_text: Optional[str] = None
+        self,
+        voice_file: Optional[str] = None,
+        voice_text: Optional[str] = None,
     ):
+        """
+        Initialize TTS Engine.
+
+        Args:
+            voice_file: Path to reference audio file for voice cloning (3-15 seconds)
+            voice_text: Transcript of the reference audio
+        """
         self.voice_file = voice_file
         self.voice_text = voice_text
         self._model = None
         self._initialized = False
         self._audio_queue: asyncio.Queue = asyncio.Queue()
-        self._sample_rate = 24000
-        self._ref_codes = None
-        self._ref_text = None
+        self._sample_rate = self.DEFAULT_SAMPLE_RATE
+        self._device = "cpu"
+        self._available = False
 
     async def initialize(self):
+        """Initialize the TTS model asynchronously."""
         if self._initialized:
             return
 
-        print("[*] Loading TTS model: neuphonic/neutts-air-q8-gguf")
-        print(
-            "[*] This may take a while on first run (downloading from Hugging Face)..."
-        )
+        print("[*] Loading TTS model: FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._init_sync)
         self._initialized = True
-        print("[+] TTS model loaded successfully")
+
+        if self._available:
+            print(f"[+] TTS model loaded successfully on {self._device}")
+        else:
+            print("[!] TTS model not available. Voice output disabled.")
 
     def _init_sync(self):
+        """Synchronous initialization."""
+        # Get TTS device from gpu_utils
         try:
-            from llama_cpp import Llama
-            from neucodec import NeuCodec
-            from phonemizer.backend import EspeakBackend
-            import librosa
-            import torch
+            from .gpu_utils import get_tts_device, print_gpu_info
 
-            self._phonemizer = EspeakBackend(
-                language="en-us", preserve_punctuation=True, with_stress=True
+            self._device = get_tts_device()
+        except ImportError:
+            self._device = "cpu"
+
+        # Check if CosyVoice is installed
+        if not COSYVOICE_MODEL_DIR.exists():
+            print(f"[!] CosyVoice model not found at {COSYVOICE_MODEL_DIR}")
+            print("[!] Run: python scripts/install_cosyvoice.py")
+            self._available = False
+            return
+
+        # Setup paths
+        _setup_cosyvoice_paths()
+
+        try:
+            # Import CosyVoice
+            from cosyvoice.cli.cosyvoice import AutoModel
+
+            print(f"[*] Loading CosyVoice3 model on {self._device}...")
+
+            # Determine if we should use GPU optimizations
+            use_gpu = self._device != "cpu"
+
+            # Set CUDA device if using GPU
+            if use_gpu:
+                import torch
+                import os
+
+                # Extract device index from "cuda:X"
+                device_idx = (
+                    int(self._device.split(":")[-1]) if ":" in self._device else 0
+                )
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(device_idx)
+                torch.cuda.set_device(
+                    0
+                )  # After CUDA_VISIBLE_DEVICES, it becomes device 0
+
+            # Load model with appropriate settings
+            self._model = AutoModel(
+                model_dir=str(COSYVOICE_MODEL_DIR),
+                load_jit=use_gpu,  # JIT compilation for GPU
+                load_trt=False,  # TensorRT requires extra setup
+                load_vllm=False,  # vLLM requires extra setup
+                fp16=use_gpu,  # Half precision for GPU
             )
 
-            print("[*] Loading backbone (GGUF)...")
-            # Keep TTS on CPU to avoid HIP/ROCm conflicts with main LLM
-            self._backbone = Llama.from_pretrained(
-                repo_id="neuphonic/neutts-air-q8-gguf",
-                filename="*.gguf",
-                verbose=False,
-                n_gpu_layers=0,  # Force CPU - GPU causes HIP state corruption
-                n_ctx=2048,
-                mlock=True,
-                flash_attn=False,
+            self._sample_rate = getattr(
+                self._model, "sample_rate", self.DEFAULT_SAMPLE_RATE
             )
+            self._available = True
 
-            print("[*] Loading codec...")
-            # NeuCodec has meta tensor issues with GPU - force CPU device
-            import warnings
-
-            # Temporarily force CPU as default device for neucodec loading
-            original_device = torch.get_default_device()
-            torch.set_default_device("cpu")
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    self._codec = NeuCodec.from_pretrained("neuphonic/neucodec")
-            finally:
-                # Restore original default device
-                if original_device:
-                    torch.set_default_device(original_device)
-                else:
-                    torch.set_default_device(None)
-            self._codec.eval()
-
-            self._model = True
-
+            # Pre-register voice if provided
             if self.voice_file and Path(self.voice_file).exists():
-                self._load_reference()
+                self._register_voice()
 
         except ImportError as e:
-            print(f"[!] TTS library not available: {e}")
-            print(
-                "[!] Voice output disabled. Install with: pip install llama-cpp-python neucodec phonemizer"
-            )
-            self._model = None
+            print(f"[!] CosyVoice not available: {e}")
+            print("[!] Run: python scripts/install_cosyvoice.py")
+            self._available = False
         except Exception as e:
-            print(f"[!] Failed to load TTS model: {e}")
+            print(f"[!] Failed to load CosyVoice model: {e}")
             import traceback
 
             traceback.print_exc()
-            self._model = None
+            self._available = False
 
-    def _has_gpu(self) -> bool:
+    def _register_voice(self):
+        """Register a reference voice for zero-shot cloning."""
+        if not self._model or not self.voice_file:
+            return
+
         try:
-            import torch
+            voice_path = Path(self.voice_file)
+            if not voice_path.exists():
+                print(f"[!] Voice file not found: {self.voice_file}")
+                return
 
-            return torch.cuda.is_available()
-        except ImportError:
-            return False
+            # Load transcript
+            prompt_text = ""
+            if self.voice_text:
+                text_path = Path(self.voice_text)
+                if text_path.exists():
+                    with open(text_path, "r", encoding="utf-8") as f:
+                        prompt_text = f.read().strip()
+                else:
+                    prompt_text = self.voice_text
 
-    def _load_reference(self):
-        import librosa
-        import torch
+            # CosyVoice3 uses instruction format
+            # Format: "You are a helpful assistant.<|endofprompt|>{transcript}"
+            if prompt_text:
+                self._prompt_text = (
+                    f"You are a helpful assistant.<|endofprompt|>{prompt_text}"
+                )
+            else:
+                self._prompt_text = "You are a helpful assistant.<|endofprompt|>"
 
-        wav, _ = librosa.load(self.voice_file, sr=16000, mono=True)
-        wav_tensor = torch.from_numpy(wav).float().unsqueeze(0).unsqueeze(0)
+            self._voice_path = str(voice_path)
+            print(f"[+] Voice reference registered: {voice_path.name}")
 
-        # Keep on CPU - codec has meta tensor issues with GPU
-        with torch.no_grad():
-            self._ref_codes = (
-                self._codec.encode_code(audio_or_path=wav_tensor).squeeze(0).squeeze(0)
-            )
-
-        if self.voice_text and Path(self.voice_text).exists():
-            with open(self.voice_text, "r", encoding="utf-8") as f:
-                self._ref_text = f.read().strip()
-        else:
-            self._ref_text = ""
-
-        print(f"[+] Voice reference loaded: {self.voice_file}")
-
-    def _to_phones(self, text: str) -> str:
-        phones = self._phonemizer.phonemize([text])
-        phones = phones[0].split()
-        return " ".join(phones)
-
-    def _decode(self, codes_str: str) -> Optional[np.ndarray]:
-        import re
-        import torch
-
-        speech_ids = [int(num) for num in re.findall(r"<\|speech_(\d+)\|>", codes_str)]
-
-        if len(speech_ids) == 0:
-            return None
-
-        with torch.no_grad():
-            codes = torch.tensor(speech_ids, dtype=torch.long, device="cpu")[
-                None, None, :
-            ]
-            recon = self._codec.decode_code(codes).cpu().numpy()
-
-        return recon[0, 0, :]
+        except Exception as e:
+            print(f"[!] Failed to register voice: {e}")
+            self._voice_path = None
+            self._prompt_text = None
 
     async def speak(self, text: str) -> Optional[bytes]:
+        """
+        Synthesize speech from text.
+
+        Args:
+            text: Text to synthesize
+
+        Returns:
+            WAV audio data as bytes, or None if synthesis fails
+        """
         if not self._initialized:
             await self.initialize()
 
-        if not self._model:
+        if not self._available or not self._model:
             return None
 
         loop = asyncio.get_event_loop()
@@ -189,60 +218,75 @@ class TTSEngine:
         return audio_data
 
     def _synthesize_sync(self, text: str) -> Optional[bytes]:
+        """Synchronous speech synthesis."""
         if not self._model:
             return None
 
         try:
+            import torch
             import soundfile as sf
 
-            input_text = self._to_phones(text)
-
-            if self._ref_codes is not None and self._ref_text:
-                ref_text_phones = self._to_phones(self._ref_text)
-                codes_str = "".join(
-                    [f"<|speech_{idx}|>" for idx in self._ref_codes.tolist()]
-                )
-                prompt = (
-                    f"user: Convert the text to speech:<|TEXT_PROMPT_START|>{ref_text_phones} {input_text}"
-                    f"<|TEXT_PROMPT_END|>\nassistant:<|SPEECH_GENERATION_START|>{codes_str}"
+            # Choose synthesis method based on whether we have a reference voice
+            if hasattr(self, "_voice_path") and self._voice_path:
+                # Zero-shot voice cloning
+                audio_generator = self._model.inference_zero_shot(
+                    tts_text=text,
+                    prompt_text=self._prompt_text,
+                    prompt_speech_16k=self._voice_path,
+                    stream=False,
                 )
             else:
-                prompt = (
-                    f"user: Convert the text to speech:<|TEXT_PROMPT_START|>{input_text}"
-                    f"<|TEXT_PROMPT_END|>\nassistant:<|SPEECH_GENERATION_START|>"
+                # Use cross-lingual mode with default voice
+                # This uses the model's built-in voice
+                audio_generator = self._model.inference_cross_lingual(
+                    tts_text=f"You are a helpful assistant.<|endofprompt|>{text}",
+                    prompt_speech_16k="",  # Empty for default
+                    stream=False,
                 )
 
-            output = self._backbone(
-                prompt,
-                max_tokens=2048,
-                temperature=1.0,
-                top_k=50,
-                stop=["<|SPEECH_GENERATION_END|>"],
-            )
-            output_str = output["choices"][0]["text"]
+            # Collect audio chunks
+            audio_chunks = []
+            for _, result in enumerate(audio_generator):
+                if "tts_speech" in result:
+                    audio_chunks.append(result["tts_speech"])
 
-            wav = self._decode(output_str)
-            if wav is None:
-                print("[!] TTS: No valid speech tokens generated")
+            if not audio_chunks:
+                print("[!] TTS: No audio generated")
                 return None
 
+            # Concatenate all chunks
+            audio_tensor = torch.cat(audio_chunks, dim=-1)
+            audio_np = audio_tensor.cpu().numpy()
+
+            # Ensure correct shape (should be 1D or 2D with shape [1, samples])
+            if audio_np.ndim == 2:
+                audio_np = audio_np.squeeze(0)
+
+            # Convert to WAV bytes
             buffer = BytesIO()
-            sf.write(buffer, wav, self._sample_rate, format="wav")
+            sf.write(buffer, audio_np, self._sample_rate, format="WAV")
             buffer.seek(0)
+
             return buffer.read()
 
         except Exception as e:
-            print(f"[!] TTS error: {e}")
+            print(f"[!] TTS synthesis error: {e}")
             import traceback
 
             traceback.print_exc()
             return None
 
     async def get_next_audio(self) -> Optional[bytes]:
+        """Get the next audio chunk from the queue."""
         try:
             return self._audio_queue.get_nowait()
         except asyncio.QueueEmpty:
             return None
 
     def get_sample_rate(self) -> int:
+        """Get the audio sample rate."""
         return self._sample_rate
+
+    def is_available(self) -> bool:
+        """Check if TTS is available."""
+        return self._available
