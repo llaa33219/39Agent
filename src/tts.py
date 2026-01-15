@@ -149,27 +149,11 @@ class TTSEngine:
             device_name = self._device if use_gpu else "cpu"
             print(f"[*] Loading CosyVoice3 model on {device_name}...")
 
-            # Set CUDA device if using GPU
-            if use_gpu:
-                import torch
-                import os
-
-                # Extract device index from "cuda:X"
-                device_idx = (
-                    int(self._device.split(":")[-1]) if ":" in self._device else 0
-                )
-                os.environ["CUDA_VISIBLE_DEVICES"] = str(device_idx)
-                torch.cuda.set_device(
-                    0
-                )  # After CUDA_VISIBLE_DEVICES, it becomes device 0
-
-            # Load model with appropriate settings
-            # Note: CosyVoice3 doesn't support load_jit (only CosyVoice/CosyVoice2 do)
             self._model = AutoModel(
                 model_dir=str(COSYVOICE_MODEL_DIR),
                 load_trt=False,  # TensorRT requires extra setup
                 load_vllm=False,  # vLLM requires extra setup
-                fp16=use_gpu,  # Half precision for GPU
+                fp16=(use_gpu and self._device == "cuda:0"),  # FP16 only on primary GPU
             )
 
             self._sample_rate = getattr(
@@ -180,7 +164,6 @@ class TTSEngine:
 
         except Exception as e:
             error_msg = str(e).lower()
-            # Check for GPU-related errors (ROCm, CUDA, compatibility issues)
             gpu_error_keywords = [
                 "rocm",
                 "cuda",
@@ -193,6 +176,8 @@ class TTSEngine:
                 "not available",
                 "not supported",
                 "no kernel",
+                "meta tensor",
+                "meta parameter",
             ]
             is_gpu_error = any(kw in error_msg for kw in gpu_error_keywords)
 
@@ -202,7 +187,6 @@ class TTSEngine:
                 self._available = False
                 return False
             else:
-                # Non-GPU error or CPU mode failed - raise to outer handler
                 raise
 
     def _register_voice(self):

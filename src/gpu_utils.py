@@ -90,10 +90,18 @@ def get_gpu_allocation() -> GPUAllocation:
             llm_device="cuda:0", tts_device="cpu", num_gpus=1, has_cuda=True
         )
     else:
-        # Multiple GPUs - distribute models
-        # LLM on GPU 0 (usually primary), TTS on GPU 1
+        # Multiple GPUs - LLM on GPU 0, TTS on CPU
+        #
+        # Note: We intentionally keep TTS on CPU even with multiple GPUs because:
+        # 1. CosyVoice uses Qwen2ForCausalLM.from_pretrained() which initializes
+        #    with meta tensors and assumes cuda:0 as the target device
+        # 2. Setting CUDA_VISIBLE_DEVICES after torch import breaks meta tensor
+        #    migration (PyTorch error: "Cannot copy out of meta tensor")
+        # 3. TTS on CPU is fast enough (~0.3x RTF) and doesn't compete with VLM
+        #    for GPU memory, improving overall stability
+        # 4. The VLM benefits more from GPU acceleration than TTS
         return GPUAllocation(
-            llm_device="cuda:0", tts_device="cuda:1", num_gpus=num_gpus, has_cuda=True
+            llm_device="cuda:0", tts_device="cpu", num_gpus=num_gpus, has_cuda=True
         )
 
 
