@@ -220,10 +220,6 @@ def main():
     print(f"Installation directory: {COSYVOICE_DIR}")
     print()
 
-    if is_installed() and not force:
-        print("[*] CosyVoice is already installed.")
-        print("[*] Verifying dependencies...")
-
     if force and COSYVOICE_DIR.exists():
         print("[*] Force reinstall requested. Cleaning existing installation...")
         # Only remove model, keep repo for faster reinstall
