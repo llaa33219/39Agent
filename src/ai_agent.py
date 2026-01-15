@@ -261,10 +261,12 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
   - Use `cursor-move` to navigate. 
   - Look at the coordinates in the image carefully.
   - If you need to move far, do it in steps.
-- **Clicking**:
-  - NEVER click blindly. Verify the cursor position in the image matches your target.
-  - If the cursor is not exactly over the target, use `cursor-move` to adjust before clicking.
-  - "I'll click here" -> CHECK IMAGE -> "Is cursor on target?" -> If NO, move. If YES, click.
+- **Clicking Safety Protocol (MANDATORY)**:
+  - BEFORE clicking, you MUST visually verify the cursor position in the screenshot.
+  - Ask yourself: "Is the cursor pointing EXACTLY at the center of the target?"
+    - YES -> Use `click`.
+    - NO -> Use `cursor-move` to adjust.
+  - DO NOT assume `cursor-move` landed perfectly. ALWAYS CHECK THE IMAGE.
 - **Track Progress**: Use the `todo` tool to manage complex tasks.
 - **Completion**: When finished, use `speak` + `end`.
 

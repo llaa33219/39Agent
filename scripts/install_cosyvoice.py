@@ -147,6 +147,7 @@ def install_dependencies():
         "diffusers",
         "onnxruntime",
         "WeTextProcessing",
+        "hyperpyyaml",
     ]
 
     for pkg in critical_packages:
