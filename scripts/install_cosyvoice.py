@@ -126,10 +126,31 @@ def install_dependencies():
     with open(requirements_file, "r") as f:
         requirements = f.read()
 
+    # Find uv
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        # If uv not in PATH, try to find it relative to user home (fallback)
+        uv_path = str(Path.home() / ".local" / "bin" / "uv")
+        if not os.path.exists(uv_path):
+            uv_path = str(Path.home() / ".cargo" / "bin" / "uv")
+            if not os.path.exists(uv_path):
+                print("[!] uv not found. Falling back to pip...")
+                uv_path = None
+
     # Install from requirements.txt
-    # Using --no-deps for some packages to avoid conflicts with existing torch
-    run_command(
-        [
+    cmd = []
+    if uv_path:
+        cmd = [
+            uv_path,
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
+            "-r",
+            str(requirements_file),
+        ]
+    else:
+        cmd = [
             sys.executable,
             "-m",
             "pip",
@@ -137,9 +158,9 @@ def install_dependencies():
             "-r",
             str(requirements_file),
             "--quiet",
-        ],
-        check=False,
-    )  # Don't fail on minor issues
+        ]
+
+    run_command(cmd, check=False)
 
     # Ensure critical packages are installed
     critical_packages = [
@@ -155,9 +176,16 @@ def install_dependencies():
             __import__(pkg.lower().replace("-", "_"))
         except ImportError:
             print(f"[*] Installing missing package: {pkg}")
-            run_command(
-                [sys.executable, "-m", "pip", "install", pkg, "--quiet"], check=False
-            )
+            if uv_path:
+                run_command(
+                    [uv_path, "pip", "install", "--python", sys.executable, pkg],
+                    check=False,
+                )
+            else:
+                run_command(
+                    [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+                    check=False,
+                )
 
     print("[+] Dependencies installed")
 
