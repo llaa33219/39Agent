@@ -85,6 +85,15 @@ class TTSEngine:
 
     def _init_sync(self):
         """Synchronous initialization."""
+        # Suppress ONNX Runtime CUDA provider errors when CUDA libs are not available
+        # (e.g., libcublasLt.so.12 missing). ONNX will fallback to CPU automatically.
+        try:
+            import onnxruntime as ort
+
+            ort.set_default_logger_severity(4)  # FATAL only - suppress CUDA lib errors
+        except ImportError:
+            pass
+
         # Get TTS device from gpu_utils
         try:
             from .gpu_utils import get_tts_device, print_gpu_info
