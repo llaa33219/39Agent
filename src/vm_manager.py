@@ -428,7 +428,12 @@ class VMManager:
 
     def _kill_port_user(self, port: int) -> bool:
         """Kill any process using the specified port. Returns True if killed."""
+        import time
+
         killed = False
+
+        subprocess.run(["pkill", "-9", "-f", "qemu-system-x86"], capture_output=True)
+
         for cmd, parse_fn in [
             (["lsof", "-ti", f":{port}"], lambda r: r.stdout.strip().split("\n")),
             (
@@ -445,23 +450,20 @@ class VMManager:
                         subprocess.run(["kill", "-9", pid], capture_output=True)
                     if pids:
                         killed = True
-                        break
             except FileNotFoundError:
                 continue
 
-        if killed:
-            import time
+        for _ in range(30):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.bind(("127.0.0.1", port))
+                sock.close()
+                return True
+            except OSError:
+                time.sleep(0.1)
+            finally:
+                sock.close()
 
-            for _ in range(20):
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                try:
-                    sock.bind(("127.0.0.1", port))
-                    sock.close()
-                    return True
-                except OSError:
-                    time.sleep(0.1)
-                finally:
-                    sock.close()
         return killed
 
     async def start(self):
