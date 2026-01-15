@@ -222,9 +222,7 @@ def main():
 
     if is_installed() and not force:
         print("[*] CosyVoice is already installed.")
-        print("[*] Use --force to reinstall.")
-        verify_installation()
-        return 0
+        print("[*] Verifying dependencies...")
 
     if force and COSYVOICE_DIR.exists():
         print("[*] Force reinstall requested. Cleaning existing installation...")
