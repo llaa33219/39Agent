@@ -240,6 +240,7 @@ def install_dependencies():
         ("whisper", "openai-whisper"),  # Required for voice cloning
         ("inflect", "inflect"),  # Text normalization
         ("librosa", "librosa"),  # Audio processing
+        ("torchcodec", "torchcodec"),  # Required by torchaudio for audio loading
     ]
 
     # Install onnxruntime-gpu on Linux for GPU acceleration
