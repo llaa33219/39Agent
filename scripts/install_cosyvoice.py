@@ -167,7 +167,7 @@ def install_dependencies():
         "conformer",
         "diffusers",
         "onnxruntime",
-        "WeTextProcessing",
+        "modelscope",
         "hyperpyyaml",
     ]
 

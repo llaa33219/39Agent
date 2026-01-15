@@ -207,7 +207,7 @@ def install_dependencies(uv: str) -> None:
 
 
 def check_cosyvoice_dependencies() -> bool:
-    critical_packages = ["hyperpyyaml", "onnxruntime", "diffusers"]
+    critical_packages = ["hyperpyyaml", "onnxruntime", "diffusers", "modelscope"]
 
     check_script = "; ".join([f"import {pkg}" for pkg in critical_packages])
 
