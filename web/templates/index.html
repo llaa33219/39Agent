@@ -25,11 +25,6 @@
                     </select>
                 </div>
                 
-                <div class="form-section">
-                    <label>Task / Command</label>
-                    <textarea id="task-input" placeholder="What should the agent do?"></textarea>
-                </div>
-                
                 <div class="form-section collapsible">
                     <button class="collapse-toggle" onclick="toggleAdvanced()">
                         Advanced Settings
@@ -86,7 +81,13 @@
                                 <img id="hud-character-image" alt="Character">
                             </div>
                             <div class="hud-content">
-                                <div id="hud-speech-text" class="hud-speech"></div>
+                                <div id="hud-speech-text" class="hud-speech" style="display: none;"></div>
+                                <div id="hud-user-input-container" class="hud-user-input">
+                                    <input type="text" id="hud-input" placeholder="What should the agent do?" onkeydown="if(event.key==='Enter') sendUserMessage()">
+                                    <button id="hud-send-btn" onclick="sendUserMessage()">
+                                        <span class="icon">&#10148;</span>
+                                    </button>
+                                </div>
                                 <div id="hud-tool-status" class="hud-tool"></div>
                             </div>
                         </div>

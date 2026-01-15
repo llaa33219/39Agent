@@ -301,7 +301,6 @@ textarea {
     gap: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     z-index: 10;
-    pointer-events: none;
     max-height: 100px;
     width: fit-content;
     transform: translate(-50%, 0);
@@ -352,4 +351,49 @@ textarea {
     height: 6px;
     background: #667eea;
     border-radius: 50%;
+}
+
+.hud-user-input {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    min-width: 300px;
+    margin-bottom: 2px;
+}
+
+.hud-user-input input {
+    flex: 1;
+    background: #1a1a24;
+    border: 1px solid #2a2a3a;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #e0e0e0;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.hud-user-input input:focus {
+    border-color: #667eea;
+}
+
+.hud-user-input button {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 8px;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: white;
+    transition: opacity 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.hud-user-input button:hover {
+    opacity: 0.9;
 }

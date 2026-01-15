@@ -3,6 +3,7 @@ let selectedCharacter = null;
 let isRecording = false;
 let currentSessionId = null;
 let reconnectAttempts = 0;
+let agentIdle = true;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY = 2000;
 
@@ -186,16 +187,10 @@ function toggleAdvanced() {
 }
 
 async function startSession() {
-    const task = document.getElementById('task-input').value.trim();
     const isoPath = document.getElementById('iso-select').value;
     const diskGb = parseInt(document.getElementById('disk-gb').value);
     const ramMb = parseInt(document.getElementById('ram-mb').value);
     const vramMb = parseInt(document.getElementById('vram-mb').value);
-    
-    if (!task) {
-        alert('Please enter a task for the agent.');
-        return;
-    }
     
     document.getElementById('start-btn').disabled = true;
     
@@ -205,7 +200,7 @@ async function startSession() {
         ws.send(JSON.stringify({
             action: 'start',
             character: selectedCharacter || 'default',
-            task: task,
+            task: "",
             iso_path: isoPath || null,
             disk_gb: diskGb,
             ram_mb: ramMb,
@@ -255,11 +250,15 @@ function handleMessage(data) {
             break;
             
         case 'speak':
+            hideUserInput();
             updateSpeech(data.text);
             break;
             
         case 'tool':
             addToolEntry(data.name, data.params, true);
+            if (data.name === 'end') {
+                showUserInput();
+            }
             break;
             
         case 'agent_response':
@@ -294,10 +293,12 @@ function updateStatus(status) {
             break;
         case 'stopped':
             text.textContent = 'Stopped';
+            showUserInput();
             break;
         case 'error':
             dot.classList.add('error');
             text.textContent = 'Error';
+            showUserInput();
             break;
         case 'restarted':
             dot.classList.add('running');
@@ -313,6 +314,49 @@ function showRunningScreen(character) {
     const hudImg = document.getElementById('hud-character-image');
     if (hudImg && character && character.has_image) {
         hudImg.src = `/api/character/${character.name}/image`;
+    }
+    
+    showUserInput();
+}
+
+function showUserInput() {
+    agentIdle = true;
+    const speech = document.getElementById('hud-speech-text');
+    const inputContainer = document.getElementById('hud-user-input-container');
+    const input = document.getElementById('hud-input');
+    
+    if (speech) speech.style.display = 'none';
+    if (inputContainer) {
+        inputContainer.style.display = 'flex';
+        setTimeout(() => {
+            if (input) input.focus();
+        }, 100);
+    }
+}
+
+function hideUserInput() {
+    agentIdle = false;
+    const speech = document.getElementById('hud-speech-text');
+    const inputContainer = document.getElementById('hud-user-input-container');
+    
+    if (speech) speech.style.display = 'block';
+    if (inputContainer) inputContainer.style.display = 'none';
+}
+
+function sendUserMessage() {
+    const input = document.getElementById('hud-input');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: 'user_message',
+            message: message
+        }));
+        input.value = '';
+    } else {
+        console.error("WebSocket not connected");
     }
 }
 
