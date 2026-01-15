@@ -127,9 +127,9 @@ class TTSEngine:
                 )  # After CUDA_VISIBLE_DEVICES, it becomes device 0
 
             # Load model with appropriate settings
+            # Note: CosyVoice3 doesn't support load_jit (only CosyVoice/CosyVoice2 do)
             self._model = AutoModel(
                 model_dir=str(COSYVOICE_MODEL_DIR),
-                load_jit=use_gpu,  # JIT compilation for GPU
                 load_trt=False,  # TensorRT requires extra setup
                 load_vllm=False,  # vLLM requires extra setup
                 fp16=use_gpu,  # Half precision for GPU
