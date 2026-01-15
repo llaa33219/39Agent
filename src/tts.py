@@ -317,6 +317,10 @@ class TTSEngine:
             sf.write(buffer, audio_np, self._sample_rate, format="WAV")
             buffer.seek(0)
 
+            # Synchronize GPU to ensure all TTS operations complete before returning
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
             return buffer.read()
 
         except Exception as e:

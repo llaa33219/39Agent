@@ -920,6 +920,9 @@ class AIAgent:
             }
         )
 
+        # Synchronize all GPUs before LLM generation to prevent contention with TTS
+        GPUMemoryManager.synchronize()
+
         print(f"[*] Generating LLM response (on {self.llm._device})...")
         import time
 
