@@ -428,6 +428,7 @@ class VMManager:
 
     def _kill_port_user(self, port: int) -> bool:
         """Kill any process using the specified port. Returns True if killed."""
+        killed = False
         for cmd, parse_fn in [
             (["lsof", "-ti", f":{port}"], lambda r: r.stdout.strip().split("\n")),
             (
@@ -438,15 +439,30 @@ class VMManager:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode == 0:
-                    pids = parse_fn(result)
-                    for pid in filter(None, pids):
+                    pids = [p for p in parse_fn(result) if p]
+                    for pid in pids:
                         print(f"[*] Killing process {pid} using port {port}")
                         subprocess.run(["kill", "-9", pid], capture_output=True)
                     if pids:
-                        return True
+                        killed = True
+                        break
             except FileNotFoundError:
                 continue
-        return False
+
+        if killed:
+            import time
+
+            for _ in range(20):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                try:
+                    sock.bind(("127.0.0.1", port))
+                    sock.close()
+                    return True
+                except OSError:
+                    time.sleep(0.1)
+                finally:
+                    sock.close()
+        return killed
 
     async def start(self):
         print("[*] Starting VM...")
@@ -510,6 +526,16 @@ class VMManager:
         shutil.copy(ovmf_vars_src, ovmf_vars)
 
         self._kill_port_user(self._vnc_port)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", self._vnc_port))
+        except OSError as e:
+            raise RuntimeError(
+                f"VNC port {self._vnc_port} still in use after cleanup: {e}"
+            )
+        finally:
+            sock.close()
 
         cmd = [
             "qemu-system-x86_64",
