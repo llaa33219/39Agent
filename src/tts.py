@@ -107,10 +107,38 @@ class TTSEngine:
             # Import CosyVoice
             from cosyvoice.cli.cosyvoice import AutoModel
 
-            print(f"[*] Loading CosyVoice3 model on {self._device}...")
+            # Try GPU first, fallback to CPU on failure
+            if not self._try_load_model(AutoModel, use_gpu=self._device != "cpu"):
+                if self._device != "cpu":
+                    print("[!] GPU load failed, falling back to CPU...")
+                    self._device = "cpu"
+                    self._try_load_model(AutoModel, use_gpu=False)
 
-            # Determine if we should use GPU optimizations
-            use_gpu = self._device != "cpu"
+            if self._available:
+                # Pre-register voice if provided
+                if self.voice_file and Path(self.voice_file).exists():
+                    self._register_voice()
+
+        except ImportError as e:
+            print(f"[!] CosyVoice not available: {e}")
+            print("[!] Run: python scripts/install_cosyvoice.py")
+            self._available = False
+        except Exception as e:
+            print(f"[!] Failed to load CosyVoice model: {e}")
+            import traceback
+
+            traceback.print_exc()
+            self._available = False
+
+    def _try_load_model(self, AutoModel, use_gpu: bool) -> bool:
+        """
+        Try to load the model with given settings.
+
+        Returns True on success, False on failure.
+        """
+        try:
+            device_name = self._device if use_gpu else "cpu"
+            print(f"[*] Loading CosyVoice3 model on {device_name}...")
 
             # Set CUDA device if using GPU
             if use_gpu:
@@ -139,21 +167,34 @@ class TTSEngine:
                 self._model, "sample_rate", self.DEFAULT_SAMPLE_RATE
             )
             self._available = True
+            return True
 
-            # Pre-register voice if provided
-            if self.voice_file and Path(self.voice_file).exists():
-                self._register_voice()
-
-        except ImportError as e:
-            print(f"[!] CosyVoice not available: {e}")
-            print("[!] Run: python scripts/install_cosyvoice.py")
-            self._available = False
         except Exception as e:
-            print(f"[!] Failed to load CosyVoice model: {e}")
-            import traceback
+            error_msg = str(e).lower()
+            # Check for GPU-related errors (ROCm, CUDA, compatibility issues)
+            gpu_error_keywords = [
+                "rocm",
+                "cuda",
+                "gpu",
+                "device",
+                "hip",
+                "out of memory",
+                "oom",
+                "incompatible",
+                "not available",
+                "not supported",
+                "no kernel",
+            ]
+            is_gpu_error = any(kw in error_msg for kw in gpu_error_keywords)
 
-            traceback.print_exc()
-            self._available = False
+            if use_gpu and is_gpu_error:
+                print(f"[!] GPU error: {e}")
+                self._model = None
+                self._available = False
+                return False
+            else:
+                # Non-GPU error or CPU mode failed - raise to outer handler
+                raise
 
     def _register_voice(self):
         """Register a reference voice for zero-shot cloning."""
