@@ -206,16 +206,37 @@ def install_dependencies(uv: str) -> None:
     print("[+] Dependencies installed successfully")
 
 
+def check_cosyvoice_dependencies() -> bool:
+    critical_packages = ["hyperpyyaml", "onnxruntime", "diffusers"]
+
+    check_script = "; ".join([f"import {pkg}" for pkg in critical_packages])
+
+    try:
+        run_cmd([str(PYTHON_BIN), "-c", check_script], check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def ensure_cosyvoice() -> bool:
     cosyvoice_dir = ROOT_DIR / "data" / "cosyvoice"
     model_dir = cosyvoice_dir / "pretrained_models" / "Fun-CosyVoice3-0.5B"
+    install_script = ROOT_DIR / "scripts" / "install_cosyvoice.py"
 
-    if model_dir.exists() and (model_dir / "llm.pt").exists():
-        print("[+] CosyVoice TTS model found")
+    # 1. Check if model exists
+    model_exists = model_dir.exists() and (model_dir / "llm.pt").exists()
+
+    # 2. Check dependencies
+    deps_ok = check_cosyvoice_dependencies()
+
+    if model_exists and deps_ok:
+        print("[+] CosyVoice TTS model and dependencies found")
         return True
 
-    print("[*] CosyVoice TTS model not found. Installing...")
-    install_script = ROOT_DIR / "scripts" / "install_cosyvoice.py"
+    if not model_exists:
+        print("[*] CosyVoice TTS model not found. Installing...")
+    elif not deps_ok:
+        print("[*] CosyVoice dependencies missing or broken. Reinstalling...")
 
     if not install_script.exists():
         print("[!] Install script not found. TTS will not work.")
