@@ -113,6 +113,70 @@ def download_model():
     print(f"[+] Model downloaded to {MODEL_DIR}")
 
 
+def get_python_version() -> tuple[int, int]:
+    """Get Python major.minor version."""
+    return sys.version_info[:2]
+
+
+def create_compatible_requirements(original_file: Path, temp_file: Path) -> None:
+    """Create a modified requirements file compatible with current Python version."""
+    py_version = get_python_version()
+
+    with open(original_file, "r") as f:
+        lines = f.readlines()
+
+    filtered_lines = []
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip empty lines and comments
+        if not stripped or stripped.startswith("#"):
+            filtered_lines.append(line)
+            continue
+
+        # Skip extra index URLs - they cause conflicts with uv
+        # We'll use default PyPI which has all the packages we need
+        if stripped.startswith("--extra-index-url"):
+            print(f"[*] Skipping extra index URL (using PyPI): {stripped[:60]}...")
+            continue
+
+        # Python 3.13+ compatibility fixes
+        if py_version >= (3, 13):
+            # onnxruntime-gpu 1.18.0 doesn't have Python 3.13 wheels
+            # Replace with CPU version (still provides inference, just slower)
+            if "onnxruntime-gpu" in stripped:
+                # Use latest onnxruntime (CPU) - compatible with Python 3.13
+                filtered_lines.append("onnxruntime\n")
+                print(
+                    f"[*] Python {py_version[0]}.{py_version[1]}: Replacing onnxruntime-gpu with onnxruntime (CPU)"
+                )
+                continue
+
+            # Skip pinned onnxruntime version too (for non-Linux platforms)
+            if stripped.startswith("onnxruntime=="):
+                filtered_lines.append("onnxruntime\n")
+                continue
+
+            # deepspeed may have issues with Python 3.13
+            if "deepspeed" in stripped:
+                print(
+                    f"[*] Python {py_version[0]}.{py_version[1]}: Skipping deepspeed (optional, may not build)"
+                )
+                continue
+
+            # tensorrt packages don't have 3.13 support
+            if "tensorrt" in stripped:
+                print(
+                    f"[*] Python {py_version[0]}.{py_version[1]}: Skipping tensorrt (no 3.13 wheels)"
+                )
+                continue
+
+        filtered_lines.append(line)
+
+    with open(temp_file, "w") as f:
+        f.writelines(filtered_lines)
+
+
 def install_dependencies():
     """Install CosyVoice Python dependencies."""
     print("\n[3/4] Installing CosyVoice dependencies...")
@@ -121,10 +185,6 @@ def install_dependencies():
     if not requirements_file.exists():
         print(f"[!] Requirements file not found: {requirements_file}")
         return
-
-    # Read and filter requirements to avoid conflicts
-    with open(requirements_file, "r") as f:
-        requirements = f.read()
 
     # Find uv
     uv_path = shutil.which("uv")
@@ -137,7 +197,11 @@ def install_dependencies():
                 print("[!] uv not found. Falling back to pip...")
                 uv_path = None
 
-    # Install from requirements.txt
+    # Create a modified requirements file for compatibility
+    temp_requirements = COSYVOICE_DIR / "requirements_compat.txt"
+    create_compatible_requirements(requirements_file, temp_requirements)
+
+    # Install from modified requirements.txt
     cmd = []
     if uv_path:
         cmd = [
@@ -147,7 +211,7 @@ def install_dependencies():
             "--python",
             sys.executable,
             "-r",
-            str(requirements_file),
+            str(temp_requirements),
         ]
     else:
         cmd = [
@@ -156,36 +220,44 @@ def install_dependencies():
             "pip",
             "install",
             "-r",
-            str(requirements_file),
+            str(temp_requirements),
             "--quiet",
         ]
 
     run_command(cmd, check=False)
 
     # Ensure critical packages are installed
+    # These are essential for CosyVoice to work
     critical_packages = [
-        "conformer",
-        "diffusers",
-        "onnxruntime",
-        "modelscope",
-        "hyperpyyaml",
+        ("conformer", "conformer"),
+        ("diffusers", "diffusers"),
+        ("onnxruntime", "onnxruntime"),
+        ("modelscope", "modelscope"),
+        ("hyperpyyaml", "HyperPyYAML"),
+        ("whisper", "openai-whisper"),  # Required for voice cloning
+        ("inflect", "inflect"),  # Text normalization
+        ("librosa", "librosa"),  # Audio processing
     ]
 
-    for pkg in critical_packages:
+    for import_name, pkg_name in critical_packages:
         try:
-            __import__(pkg.lower().replace("-", "_"))
+            __import__(import_name.lower().replace("-", "_"))
         except ImportError:
-            print(f"[*] Installing missing package: {pkg}")
+            print(f"[*] Installing missing package: {pkg_name}")
             if uv_path:
                 run_command(
-                    [uv_path, "pip", "install", "--python", sys.executable, pkg],
+                    [uv_path, "pip", "install", "--python", sys.executable, pkg_name],
                     check=False,
                 )
             else:
                 run_command(
-                    [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+                    [sys.executable, "-m", "pip", "install", pkg_name, "--quiet"],
                     check=False,
                 )
+
+    # Cleanup temp file
+    if temp_requirements.exists():
+        temp_requirements.unlink()
 
     print("[+] Dependencies installed")
 
