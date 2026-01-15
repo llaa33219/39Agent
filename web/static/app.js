@@ -304,6 +304,15 @@ function updateStatus(status) {
             dot.classList.add('running');
             text.textContent = 'Restarted';
             break;
+        case 'agent_running':
+            dot.classList.add('running');
+            text.textContent = 'Agent Running';
+            hideUserInput();
+            break;
+        case 'already_running':
+            dot.classList.add('running');
+            text.textContent = 'Already Running';
+            break;
     }
 }
 

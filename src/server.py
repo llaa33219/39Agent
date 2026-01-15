@@ -316,7 +316,21 @@ async def websocket_session(websocket: WebSocket):
                 await websocket.send_json({"type": "screen", "image": b64_image})
                 print(f"[+] Initial screen sent ({len(b64_image)} bytes)")
 
-                asyncio.create_task(run_agent_loop(agent, websocket))
+                # Agent does NOT auto-start - user must send "run" action
+                print("[*] VM ready. Waiting for 'run' command to start agent...")
+
+            elif action == "run":
+                # Start the agent loop (user explicitly requested to run)
+                if agent and not agent._running:
+                    print("[*] User requested agent run, starting agent loop...")
+                    asyncio.create_task(run_agent_loop(agent, websocket))
+                    await websocket.send_json(
+                        {"type": "status", "status": "agent_running"}
+                    )
+                elif agent and agent._running:
+                    await websocket.send_json(
+                        {"type": "status", "status": "already_running"}
+                    )
 
             elif action == "stop":
                 if agent:
@@ -332,8 +346,24 @@ async def websocket_session(websocket: WebSocket):
                     agent.stop()
                     await agent.stop_vm()
                     await agent.start_vm()
-                    asyncio.create_task(run_agent_loop(agent, websocket))
+                    # Don't auto-start agent loop, wait for "run" action
                     await websocket.send_json({"type": "status", "status": "restarted"})
+
+            elif action == "user_message":
+                # User sent a message/command - set task and start agent if not running
+                message = data.get("message", "")
+                if agent and message:
+                    # Update the task
+                    agent.config.task = message
+                    print(f"[*] User message received: {message[:50]}...")
+
+                    # Start agent if not already running
+                    if not agent._running:
+                        print("[*] Starting agent loop with user task...")
+                        asyncio.create_task(run_agent_loop(agent, websocket))
+                        await websocket.send_json(
+                            {"type": "status", "status": "agent_running"}
+                        )
 
     except WebSocketDisconnect:
         print(f"[*] WebSocket disconnected for session {session_id}")
@@ -352,24 +382,38 @@ async def run_agent_loop(agent: AIAgent, websocket: WebSocket):
     try:
         async for response, result in agent.run():
             print(f"[*] Agent response received, sending to browser")
-            await websocket.send_json(
-                {
-                    "type": "agent_response",
-                    "response": response,
-                    "tool_result": {
-                        "success": result.success,
-                        "message": result.message,
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "agent_response",
+                        "response": response,
+                        "tool_result": {
+                            "success": result.success,
+                            "message": result.message,
+                        }
+                        if result
+                        else None,
                     }
-                    if result
-                    else None,
-                }
-            )
+                )
+            except RuntimeError as send_err:
+                # WebSocket already closed
+                if "websocket.close" in str(send_err) or "already completed" in str(
+                    send_err
+                ):
+                    print("[*] WebSocket closed, stopping agent loop")
+                    agent.stop()
+                    return
+                raise
     except Exception as e:
         print(f"[!] Agent loop error: {e}")
         import traceback
 
         traceback.print_exc()
-        await websocket.send_json({"type": "error", "message": str(e)})
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except RuntimeError:
+            # WebSocket already closed, ignore
+            pass
 
 
 def main():

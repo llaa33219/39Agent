@@ -282,7 +282,7 @@ class TTSEngine:
                 audio_generator = self._model.inference_zero_shot(
                     tts_text=text,
                     prompt_text=self._prompt_text,
-                    prompt_speech_16k=self._voice_path,
+                    prompt_wav=self._voice_path,
                     stream=False,
                 )
             else:
@@ -290,7 +290,7 @@ class TTSEngine:
                 # This uses the model's built-in voice
                 audio_generator = self._model.inference_cross_lingual(
                     tts_text=f"You are a helpful assistant.<|endofprompt|>{text}",
-                    prompt_speech_16k="",  # Empty for default
+                    prompt_wav="",  # Empty for default
                     stream=False,
                 )
 
