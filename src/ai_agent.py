@@ -199,52 +199,44 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
    text: Hello World
    </tool>
 
-4. cursor-tp - Move cursor to approximate absolute position (screen is {width}x{height})
-   NOTE: cursor-tp may have slight positioning errors. Use cursor-move after cursor-tp for fine adjustment.
-   <tool>
-   name: cursor-tp
-   x: 640
-   y: 360
-   </tool>
-
-5. cursor-move - Move cursor relative to current position (MORE ACCURATE than cursor-tp)
+4. cursor-move - Move cursor relative to current position
    <tool>
    name: cursor-move
    dx: 100
    dy: -50
    </tool>
 
-6. click - Click mouse button at current position
+5. click - Click mouse button at current position
    <tool>
    name: click
    button: left
    </tool>
 
-7. click-on - Hold mouse button down
+6. click-on - Hold mouse button down
    <tool>
    name: click-on
    button: left
    </tool>
 
-8. click-off - Release mouse button
+7. click-off - Release mouse button
    <tool>
    name: click-off
    button: left
    </tool>
 
-9. speak - Say something to the user
+8. speak - Say something to the user
    <tool>
    name: speak
    text: I found the file you requested.
    </tool>
 
-10. memory - Search past conversation memories
+9. memory - Search past conversation memories
     <tool>
     name: memory
     query: previous file operations
     </tool>
 
-11. todo - Manage your task list
+10. todo - Manage your task list
     <tool>
     name: todo
     action: read
@@ -257,7 +249,7 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
       - [x] Task 2 (done)
     </tool>
 
-12. end - Complete the current task
+11. end - Complete the current task
     <tool>
     name: end
     reason: Task completed successfully
@@ -265,33 +257,16 @@ Use tools by wrapping them in <tool></tool> tags with YAML content.
 
 ## Rules
 - You MUST always include speak tool first, then action tool(s)
-- CRITICAL: To click something, you MUST use cursor-tp BEFORE click!
-- NEVER click without setting the position first. Mindless clicking is strictly forbidden.
-- Always double-check the coordinates from the screen image before moving the cursor.
-- IMPORTANT: cursor-tp has positioning errors. After cursor-tp, use cursor-move for fine adjustment if needed.
-- Example for clicking a button at position (500, 300):
-  <tool>
-  name: speak
-  text: I'll click the Install button at coordinates (500, 300).
-  </tool>
-  <tool>
-  name: cursor-tp
-  x: 500
-  y: 300
-  </tool>
-  <tool>
-  name: cursor-move
-  dx: 0
-  dy: 0
-  </tool>
-  <tool>
-  name: click
-  button: left
-  </tool>
-- Prefer cursor-move for small adjustments (more accurate than cursor-tp)
-- Always specify exact pixel coordinates when clicking. Do not guess; look at the image carefully.
-- Track your progress using the todo tool
-- When the task is complete, use speak + end tools together
+- **Mouse Movement**: 
+  - Use `cursor-move` to navigate. 
+  - Look at the coordinates in the image carefully.
+  - If you need to move far, do it in steps.
+- **Clicking**:
+  - NEVER click blindly. Verify the cursor position in the image matches your target.
+  - If the cursor is not exactly over the target, use `cursor-move` to adjust before clicking.
+  - "I'll click here" -> CHECK IMAGE -> "Is cursor on target?" -> If NO, move. If YES, click.
+- **Track Progress**: Use the `todo` tool to manage complex tasks.
+- **Completion**: When finished, use `speak` + `end`.
 
 ## Current Task
 {task}
@@ -794,41 +769,50 @@ class AIAgent:
                 print(f"[!] Error in audio loop: {e}")
                 await asyncio.sleep(1)
 
-    async def _capture_video_frames(self) -> list[Image.Image]:
+    async def _video_recorder_loop(self):
         """
-        Capture multiple frames for video context.
-
-        Captures FRAME_BUFFER_SIZE frames with FRAME_CAPTURE_INTERVAL between each.
-        Returns frames in chronological order (oldest first).
+        Background loop that continuously captures frames.
+        This provides a history of what happened since the last LLM action.
         """
-        frames = []
+        print("[*] Video recorder started")
+        try:
+            while self._running:
+                try:
+                    # Capture frame without triggering callbacks (to avoid spamming UI)
+                    # We only send to UI when run_step captures or explicitly requested
+                    if self.vm:
+                        screen = await self.vm.capture_screen()
+                        self._frame_buffer.append(screen)
 
-        print(f"[*] Capturing {self.FRAME_BUFFER_SIZE} frames for video context...")
+                        # Limit buffer size (30 seconds at 2fps)
+                        if len(self._frame_buffer) > 60:
+                            self._frame_buffer.pop(0)
 
-        for i in range(self.FRAME_BUFFER_SIZE):
-            screen_image, screen_b64 = await self._capture_screen()
-            if screen_image:
-                frames.append(screen_image)
+                except Exception as e:
+                    # Don't crash the loop
+                    pass
 
-            # Don't wait after the last frame
-            if i < self.FRAME_BUFFER_SIZE - 1:
                 await asyncio.sleep(self.FRAME_CAPTURE_INTERVAL)
-
-        print(f"[+] Captured {len(frames)} frames")
-        return frames
+        except asyncio.CancelledError:
+            pass
+        print("[*] Video recorder stopped")
 
     async def run_step(self) -> tuple[str, Optional[ToolResult]]:
         if not self.llm or not self.history or not self.tools:
             raise RuntimeError("Agent not initialized")
 
-        # Capture 6 frames for video context before LLM processing
-        video_frames = await self._capture_video_frames()
+        # 1. Get accumulated video frames (history since last step)
+        video_frames = list(self._frame_buffer)
+        self._frame_buffer.clear()  # Clear buffer for next step
 
-        # Use the last frame as the primary image for legacy compatibility
-        screen_image = video_frames[-1] if video_frames else None
+        # 2. Capture current state (the "now" frame)
+        print("[*] Capturing current screen...")
+        screen_image, screen_b64 = await self._capture_screen()
 
         if screen_image:
+            video_frames.append(screen_image)
             print(f"[+] Screen captured ({screen_image.width}x{screen_image.height})")
+            print(f"[+] Video context: {len(video_frames)} frames")
         else:
             print("[!] Failed to capture screen")
 
@@ -897,8 +881,9 @@ class AIAgent:
     async def run(self) -> AsyncIterator[tuple[str, Optional[ToolResult]]]:
         self._running = True
 
-        # Start audio monitoring loop
+        # Start background tasks
         audio_task = asyncio.create_task(self._process_audio_queue())
+        video_task = asyncio.create_task(self._video_recorder_loop())
 
         print("[*] Agent loop started")
 
@@ -914,7 +899,16 @@ class AIAgent:
                 print(f"[*] Agent stopping: {result.message}")
                 break
 
+            # Small delay to prevent tight loop if LLM is too fast
             await asyncio.sleep(0.5)
+
+        # Cleanup tasks
+        audio_task.cancel()
+        video_task.cancel()
+        try:
+            await asyncio.gather(audio_task, video_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
 
     def stop(self):
         self._running = False
